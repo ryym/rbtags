@@ -241,6 +241,7 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "ruby-prism",
+ "serde",
  "serde_json",
 ]
 

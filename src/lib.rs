@@ -1,6 +1,7 @@
 pub mod indexer;
 pub mod location;
 pub mod resolver;
+pub mod server;
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};

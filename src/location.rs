@@ -21,6 +21,11 @@ impl LineIndex {
         let col = offset - self.line_starts[line];
         (line, col)
     }
+
+    /// Returns the byte offset for a 0-based (line, column) position.
+    pub fn offset(&self, line: usize, col: usize) -> usize {
+        self.line_starts[line] + col
+    }
 }
 
 #[cfg(test)]
