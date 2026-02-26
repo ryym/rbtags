@@ -81,7 +81,7 @@ fn visit(node: &Node<'_>, namespace: &[String], in_singleton: bool, defs: &mut V
     }
 }
 
-fn resolve_constant_path(node: &Node<'_>) -> Vec<String> {
+pub fn resolve_constant_path(node: &Node<'_>) -> Vec<String> {
     if let Some(n) = node.as_constant_read_node() {
         vec![std::str::from_utf8(n.name().as_slice()).unwrap().to_string()]
     } else if let Some(n) = node.as_constant_path_node() {
