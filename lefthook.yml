@@ -1,0 +1,11 @@
+# https://lefthook.dev/configuration/index.html
+pre-commit:
+  parallel: true
+  jobs:
+    - run: cargo clippy
+      glob:
+        - "*.rs"
+    - run: cargo test
+      glob:
+        - "src/*"
+        - "Cargo.toml"
