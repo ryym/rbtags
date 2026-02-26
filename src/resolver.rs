@@ -58,42 +58,42 @@ fn visit_children(node: &Node<'_>, offset: usize) -> Option<String> {
         if let Some(result) = find_constant_at(&n.constant_path(), offset) {
             return Some(result);
         }
-        if let Some(body) = n.body() {
-            if let Some(result) = find_constant_at(&body, offset) {
-                return Some(result);
-            }
+        if let Some(body) = n.body()
+            && let Some(result) = find_constant_at(&body, offset)
+        {
+            return Some(result);
         }
     } else if let Some(n) = node.as_class_node() {
         if let Some(result) = find_constant_at(&n.constant_path(), offset) {
             return Some(result);
         }
-        if let Some(superclass) = n.superclass() {
-            if let Some(result) = find_constant_at(&superclass, offset) {
-                return Some(result);
-            }
+        if let Some(superclass) = n.superclass()
+            && let Some(result) = find_constant_at(&superclass, offset)
+        {
+            return Some(result);
         }
-        if let Some(body) = n.body() {
-            if let Some(result) = find_constant_at(&body, offset) {
-                return Some(result);
-            }
+        if let Some(body) = n.body()
+            && let Some(result) = find_constant_at(&body, offset)
+        {
+            return Some(result);
         }
     } else if let Some(n) = node.as_def_node() {
-        if let Some(body) = n.body() {
-            if let Some(result) = find_constant_at(&body, offset) {
-                return Some(result);
-            }
+        if let Some(body) = n.body()
+            && let Some(result) = find_constant_at(&body, offset)
+        {
+            return Some(result);
         }
     } else if let Some(n) = node.as_singleton_class_node() {
-        if let Some(body) = n.body() {
-            if let Some(result) = find_constant_at(&body, offset) {
-                return Some(result);
-            }
+        if let Some(body) = n.body()
+            && let Some(result) = find_constant_at(&body, offset)
+        {
+            return Some(result);
         }
     } else if let Some(n) = node.as_call_node() {
-        if let Some(receiver) = n.receiver() {
-            if let Some(result) = find_constant_at(&receiver, offset) {
-                return Some(result);
-            }
+        if let Some(receiver) = n.receiver()
+            && let Some(result) = find_constant_at(&receiver, offset)
+        {
+            return Some(result);
         }
         if let Some(args) = n.arguments() {
             for arg in &args.arguments() {
