@@ -131,22 +131,14 @@ fn main_loop(
         .or_else(|| {
             #[allow(deprecated)]
             params.root_path.as_ref().map(PathBuf::from)
-        });
+        })
+        .or_else(|| std::env::current_dir().ok());
 
     log(format_args!("root_path: {root_path:?}"));
 
-    let index = match root_path {
-        Some(root) => {
-            log(format_args!("indexing {}", root.display()));
-            WorkspaceIndex::build(&root)?
-        }
-        None => {
-            log(format_args!("no workspace root, index will be empty"));
-            WorkspaceIndex {
-                definitions: HashMap::new(),
-            }
-        }
-    };
+    let root = root_path.expect("failed to determine workspace root");
+    log(format_args!("indexing {}", root.display()));
+    let index = WorkspaceIndex::build(&root)?;
 
     let def_count: usize = index.definitions.values().map(|v| v.len()).sum();
     log(format_args!(
