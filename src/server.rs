@@ -6,8 +6,9 @@ use std::{fs, io};
 
 use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response};
 use lsp_types::{
-    request::GotoDefinition, GotoDefinitionResponse, InitializeParams, Location, OneOf, Position,
-    Range, ServerCapabilities, Uri,
+    request::GotoDefinition, request::WorkspaceSymbolRequest, GotoDefinitionResponse,
+    InitializeParams, Location, OneOf, Position, Range, ServerCapabilities, SymbolInformation,
+    SymbolKind, Uri, WorkspaceSymbolResponse,
 };
 
 use crate::indexer;
@@ -19,6 +20,7 @@ const LOG_PATH: &str = "/tmp/rbtags.log";
 
 struct LocationInfo {
     path: PathBuf,
+    kind: indexer::DefinitionKind,
     line: u32,
     col: u32,
 }
@@ -56,6 +58,7 @@ impl WorkspaceIndex {
                     .or_default()
                     .push(LocationInfo {
                         path: file_path.clone(),
+                        kind: def.kind.clone(),
                         line: line as u32,
                         col: col as u32,
                     });
@@ -77,6 +80,39 @@ impl WorkspaceIndex {
                 Some(Location::new(uri, Range::new(pos, pos)))
             })
             .collect()
+    }
+
+    fn search(&self, query: &str) -> Vec<SymbolInformation> {
+        let mut results = Vec::new();
+        for (fqn, locations) in &self.definitions {
+            if !fqn.contains(query) {
+                continue;
+            }
+            for loc in locations {
+                let Some(uri) = path_to_uri(&loc.path) else {
+                    continue;
+                };
+                let pos = Position::new(loc.line, loc.col);
+                #[allow(deprecated)] // `deprecated` field is deprecated in favor of tags
+                results.push(SymbolInformation {
+                    name: fqn.clone(),
+                    kind: def_kind_to_symbol_kind(&loc.kind),
+                    tags: None,
+                    deprecated: None,
+                    location: Location::new(uri, Range::new(pos, pos)),
+                    container_name: None,
+                });
+            }
+        }
+        results
+    }
+}
+
+fn def_kind_to_symbol_kind(kind: &indexer::DefinitionKind) -> SymbolKind {
+    match kind {
+        indexer::DefinitionKind::Module => SymbolKind::MODULE,
+        indexer::DefinitionKind::Class => SymbolKind::CLASS,
+        indexer::DefinitionKind::Method => SymbolKind::METHOD,
     }
 }
 
@@ -100,6 +136,7 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let server_capabilities = serde_json::to_value(ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })?;
     log(format_args!("server capabilities: {server_capabilities}"));
@@ -154,9 +191,27 @@ fn main_loop(
                     log(format_args!("shutdown requested"));
                     return Ok(());
                 }
-                match cast::<GotoDefinition>(req) {
+                let req = match cast::<GotoDefinition>(req) {
                     Ok((id, params)) => {
                         let result = handle_goto_definition(&index, &params);
+                        let result = serde_json::to_value(&result)?;
+                        let resp = Response {
+                            id,
+                            result: Some(result),
+                            error: None,
+                        };
+                        connection.sender.send(Message::Response(resp))?;
+                        continue;
+                    }
+                    Err(ExtractError::MethodMismatch(req)) => req,
+                    Err(err @ ExtractError::JsonError { .. }) => {
+                        log(format_args!("error extracting request: {err:?}"));
+                        continue;
+                    }
+                };
+                match cast::<WorkspaceSymbolRequest>(req) {
+                    Ok((id, params)) => {
+                        let result = handle_workspace_symbol(&index, &params);
                         let result = serde_json::to_value(&result)?;
                         let resp = Response {
                             id,
@@ -180,6 +235,23 @@ fn main_loop(
         }
     }
     Ok(())
+}
+
+fn handle_workspace_symbol(
+    index: &WorkspaceIndex,
+    params: &lsp_types::WorkspaceSymbolParams,
+) -> Option<WorkspaceSymbolResponse> {
+    let query = &params.query;
+    log(format_args!("workspace/symbol: query={query:?}"));
+
+    let symbols = index.search(query);
+    log(format_args!("  found {} symbol(s)", symbols.len()));
+
+    if symbols.is_empty() {
+        None
+    } else {
+        Some(WorkspaceSymbolResponse::Flat(symbols))
+    }
 }
 
 fn handle_goto_definition(

@@ -1,6 +1,6 @@
 use ruby_prism::Node;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DefinitionKind {
     Module,
     Class,
