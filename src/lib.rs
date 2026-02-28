@@ -1,5 +1,6 @@
 pub mod indexer;
 pub mod location;
+pub mod log;
 pub mod resolver;
 pub mod server;
 

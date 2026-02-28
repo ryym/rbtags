@@ -12,7 +12,10 @@ use lsp_types::{
 
 use crate::indexer;
 use crate::location::LineIndex;
+use crate::log::write as log;
 use crate::resolver;
+
+const LOG_PATH: &str = "/tmp/rbtags.log";
 
 struct LocationInfo {
     path: PathBuf,
@@ -27,13 +30,15 @@ struct WorkspaceIndex {
 impl WorkspaceIndex {
     fn build(root: &Path) -> io::Result<Self> {
         let rb_files = crate::collect_rb_files(root)?;
+        log(format_args!("found {} .rb files", rb_files.len()));
+
         let mut definitions: HashMap<String, Vec<LocationInfo>> = HashMap::new();
 
         for file_path in &rb_files {
             let source = match fs::read(file_path) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("warning: failed to read {}: {e}", file_path.display());
+                    log(format_args!("warning: failed to read {}: {e}", file_path.display()));
                     continue;
                 }
             };
@@ -88,7 +93,8 @@ fn path_to_uri(path: &Path) -> Option<Uri> {
 }
 
 pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
-    eprintln!("rbtags: starting LSP server");
+    crate::log::init(LOG_PATH);
+    log(format_args!("starting LSP server"));
 
     let (connection, io_threads) = Connection::stdio();
 
@@ -96,12 +102,14 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     })?;
+    log(format_args!("server capabilities: {server_capabilities}"));
     let init_params = connection.initialize(server_capabilities)?;
+    log(format_args!("initialize params: {init_params}"));
 
     main_loop(connection, init_params)?;
     io_threads.join()?;
 
-    eprintln!("rbtags: server shut down");
+    log(format_args!("server shut down"));
     Ok(())
 }
 
@@ -125,34 +133,39 @@ fn main_loop(
             params.root_path.as_ref().map(PathBuf::from)
         });
 
+    log(format_args!("root_path: {root_path:?}"));
+
     let index = match root_path {
         Some(root) => {
-            eprintln!("rbtags: indexing {}", root.display());
+            log(format_args!("indexing {}", root.display()));
             WorkspaceIndex::build(&root)?
         }
         None => {
-            eprintln!("rbtags: no workspace root, index will be empty");
+            log(format_args!("no workspace root, index will be empty"));
             WorkspaceIndex {
                 definitions: HashMap::new(),
             }
         }
     };
 
-    eprintln!(
-        "rbtags: indexed {} definitions",
-        index.definitions.values().map(|v| v.len()).sum::<usize>()
-    );
+    let def_count: usize = index.definitions.values().map(|v| v.len()).sum();
+    log(format_args!(
+        "indexed {def_count} definitions across {} FQNs",
+        index.definitions.len()
+    ));
 
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
+                log(format_args!("request: method={} id={}", req.method, req.id));
                 if connection.handle_shutdown(&req)? {
+                    log(format_args!("shutdown requested"));
                     return Ok(());
                 }
                 match cast::<GotoDefinition>(req) {
                     Ok((id, params)) => {
                         let result = handle_goto_definition(&index, &params);
-                        let result = serde_json::to_value(result)?;
+                        let result = serde_json::to_value(&result)?;
                         let resp = Response {
                             id,
                             result: Some(result),
@@ -162,12 +175,16 @@ fn main_loop(
                     }
                     Err(ExtractError::MethodMismatch(_)) => {}
                     Err(err @ ExtractError::JsonError { .. }) => {
-                        eprintln!("rbtags: error extracting request: {err:?}");
+                        log(format_args!("error extracting request: {err:?}"));
                     }
                 }
             }
-            Message::Response(_) => {}
-            Message::Notification(_) => {}
+            Message::Response(resp) => {
+                log(format_args!("response: id={}", resp.id));
+            }
+            Message::Notification(not) => {
+                log(format_args!("notification: method={}", not.method));
+            }
         }
     }
     Ok(())
@@ -179,15 +196,43 @@ fn handle_goto_definition(
 ) -> Option<GotoDefinitionResponse> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
+    log(format_args!(
+        "gotoDefinition: uri={} line={} char={}",
+        uri.as_str(),
+        position.line,
+        position.character
+    ));
 
-    let file_path = uri_to_path(uri)?;
-    let source = fs::read(&file_path).ok()?;
+    let file_path = uri_to_path(uri);
+    log(format_args!("  file_path: {file_path:?}"));
+    let file_path = file_path?;
+
+    let source = match fs::read(&file_path) {
+        Ok(s) => s,
+        Err(e) => {
+            log(format_args!("  failed to read file: {e}"));
+            return None;
+        }
+    };
 
     let line_index = LineIndex::new(&source);
     let offset = line_index.offset(position.line as usize, position.character as usize);
+    log(format_args!("  byte offset: {offset}"));
 
-    let fqn = resolver::resolve_reference(&source, offset)?;
+    let fqn = resolver::resolve_reference(&source, offset);
+    log(format_args!("  resolved FQN: {fqn:?}"));
+    let fqn = fqn?;
+
     let locations = index.lookup(&fqn);
+    log(format_args!("  found {} location(s)", locations.len()));
+    for loc in &locations {
+        log(format_args!(
+            "    -> {} {}:{}",
+            loc.uri.as_str(),
+            loc.range.start.line,
+            loc.range.start.character
+        ));
+    }
 
     if locations.is_empty() {
         None
