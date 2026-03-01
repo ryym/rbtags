@@ -175,6 +175,34 @@ ClassNode
   superclass: Some(ConstantReadNode { name: "Base" })
 ```
 
+## Assignment nodes
+
+Assignment nodes represent `x = value` expressions. They share a common pattern: each has a `value()` method returning the right-hand side as a `Node`.
+
+| Node Type                        | Ruby Example  | Notes               |
+| -------------------------------- | ------------- | ------------------- |
+| `LocalVariableWriteNode`         | `x = expr`    | Local variable      |
+| `InstanceVariableWriteNode`      | `@x = expr`   | Instance variable   |
+| `ClassVariableWriteNode`         | `@@x = expr`  | Class variable      |
+| `ConstantWriteNode`              | `X = expr`    | Constant            |
+| `GlobalVariableWriteNode`        | `$x = expr`   | Global variable     |
+| `MultiWriteNode`                 | `a, b = expr` | Multiple assignment |
+| `LocalVariableOperatorWriteNode` | `x += expr`   | Operator assignment |
+
+Common API:
+
+| Method    | Return Type | Description |
+| --------- | ----------- | ----------- |
+| `value()` | `Node`      | RHS value   |
+
+## No generic child iteration
+
+`Node` does **not** provide a method to iterate over all children generically (no `child_nodes()` or similar).
+To traverse the AST you must match each node type explicitly and access its typed accessor methods.
+
+This means any recursive traversal must enumerate the specific node types it cares about.
+When new Ruby syntax is added or new use cases arise, the traversal may need to be extended to handle additional node types.
+
 ## Performance notes
 
 Prism is a C parser with Rust FFI bindings, so parsing is fast.
