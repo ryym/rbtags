@@ -102,6 +102,26 @@ fn visit_children(node: &Node<'_>, offset: usize) -> Option<String> {
                 }
             }
         }
+    } else if let Some(n) = node.as_local_variable_write_node() {
+        if let Some(result) = find_constant_at(&n.value(), offset) {
+            return Some(result);
+        }
+    } else if let Some(n) = node.as_instance_variable_write_node() {
+        if let Some(result) = find_constant_at(&n.value(), offset) {
+            return Some(result);
+        }
+    } else if let Some(n) = node.as_class_variable_write_node() {
+        if let Some(result) = find_constant_at(&n.value(), offset) {
+            return Some(result);
+        }
+    } else if let Some(n) = node.as_constant_write_node() {
+        if let Some(result) = find_constant_at(&n.value(), offset) {
+            return Some(result);
+        }
+    } else if let Some(n) = node.as_global_variable_write_node() {
+        if let Some(result) = find_constant_at(&n.value(), offset) {
+            return Some(result);
+        }
     }
 
     None
@@ -150,6 +170,16 @@ mod tests {
         let src = b"class Foo\n  Bar\nend";
         // "Bar" starts at offset 12
         assert_eq!(resolve_reference(src, 12), Some("Bar".to_string()));
+    }
+
+    #[test]
+    fn constant_in_assignment_rhs() {
+        // "a = Foo::Bar"
+        //  0123456789...
+        let src = b"a = Foo::Bar";
+        // "Foo::Bar" starts at offset 4
+        assert_eq!(resolve_reference(src, 4), Some("Foo::Bar".to_string()));
+        assert_eq!(resolve_reference(src, 9), Some("Foo::Bar".to_string()));
     }
 
     #[test]
