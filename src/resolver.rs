@@ -118,10 +118,10 @@ fn visit_children(node: &Node<'_>, offset: usize) -> Option<String> {
         if let Some(result) = find_constant_at(&n.value(), offset) {
             return Some(result);
         }
-    } else if let Some(n) = node.as_global_variable_write_node() {
-        if let Some(result) = find_constant_at(&n.value(), offset) {
-            return Some(result);
-        }
+    } else if let Some(n) = node.as_global_variable_write_node()
+        && let Some(result) = find_constant_at(&n.value(), offset)
+    {
+        return Some(result);
     }
 
     None
