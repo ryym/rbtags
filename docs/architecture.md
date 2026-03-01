@@ -61,14 +61,12 @@ The workspace index (`WorkspaceIndex`) is built once at startup by scanning all 
 
 ## Key design decisions
 
-### Explicit AST node enumeration
+### AST traversal strategies
 
-Both `indexer.rs` and `resolver.rs` traverse the Prism AST by matching specific node types in `if let` chains. This is required because `ruby_prism::Node` provides no generic child iteration method (see [ruby-prism-usage.md](ruby-prism-usage.md#no-generic-child-iteration)).
+`indexer.rs` and `resolver.rs` use different traversal strategies suited to their needs.
 
-This means:
-
-- **indexer.rs** only needs to match structural nodes (`ProgramNode`, `StatementsNode`, `ModuleNode`, `ClassNode`, `DefNode`, `SingletonClassNode`) because it only cares about definitions.
-- **resolver.rs** must match every node type that can _contain_ a constant reference. This is the larger surface area and the more likely place where support gaps appear. Any Ruby expression type not listed in `visit_children` will be a blind spot for go-to-definition.
+- **indexer.rs** uses explicit node matching (`if let` chains) because it only cares about a small set of structural nodes (`ProgramNode`, `StatementsNode`, `ModuleNode`, `ClassNode`, `DefNode`, `SingletonClassNode`). Manual enumeration is sufficient here.
+- **resolver.rs** uses ruby-prism's `Visit` trait, which auto-generates traversal over all node types. This is necessary because constant references can appear in any expression context (if/unless, case/when, rescue, blocks, arrays, etc.). The `Visit` trait eliminates the need to manually enumerate every possible containing node type. See [ruby-prism-usage.md](ruby-prism-usage.md#no-generic-child-iteration) for background on why generic iteration isn't available otherwise.
 
 ### Static analysis only
 

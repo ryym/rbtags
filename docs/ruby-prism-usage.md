@@ -49,7 +49,8 @@ match node {
 }
 ```
 
-There is no built-in visitor trait. Recursive matching on the `Node` enum works well.
+Pattern matching on the `Node` enum works for traversing specific node types.
+For full-tree traversal, the crate also provides a `Visit` trait (see [below](#visit-trait)).
 
 ## Key node types
 
@@ -198,10 +199,40 @@ Common API:
 ## No generic child iteration
 
 `Node` does **not** provide a method to iterate over all children generically (no `child_nodes()` or similar).
-To traverse the AST you must match each node type explicitly and access its typed accessor methods.
+To traverse the AST by hand, you must match each node type explicitly and access its typed accessor methods.
 
-This means any recursive traversal must enumerate the specific node types it cares about.
-When new Ruby syntax is added or new use cases arise, the traversal may need to be extended to handle additional node types.
+For full-tree traversal, use the `Visit` trait instead (see below).
+
+## Visit trait
+
+The crate provides an auto-generated `Visit<'pr>` trait that traverses all node types automatically.
+
+```rust
+use ruby_prism::{Visit, Node};
+
+struct MyVisitor;
+
+impl<'pr> Visit<'pr> for MyVisitor {
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        // Called before visiting children of any branch node
+    }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
+        // Called when visiting a leaf node (no children)
+    }
+}
+
+let result = ruby_prism::parse(source);
+let mut visitor = MyVisitor;
+visitor.visit(&result.node());
+```
+
+Key points:
+
+- `visit()` walks the entire tree, calling `visit_branch_node_enter` / `visit_leaf_node_enter` for each node.
+- Each node type has its own override point (e.g., `visit_constant_path_node`). Override these to customize traversal for specific nodes.
+- To **skip children**, override the specific `visit_*_node` method and return without calling the default `ruby_prism::visit_*_node(self, node)`.
+- Concrete node types have `as_node()` to convert back to `Node` when needed.
 
 ## Performance notes
 
