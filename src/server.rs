@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 
-use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response};
+use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    request::GotoDefinition, request::WorkspaceSymbolRequest, GotoDefinitionResponse,
-    InitializeParams, Location, OneOf, Position, Range, ServerCapabilities, SymbolInformation,
-    SymbolKind, Uri, WorkspaceSymbolResponse,
+    notification::DidSaveTextDocument, request::GotoDefinition, request::WorkspaceSymbolRequest,
+    GotoDefinitionResponse, InitializeParams, Location, OneOf, Position, Range,
+    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri, WorkspaceSymbolResponse,
 };
 
 use crate::indexer;
@@ -30,11 +31,17 @@ struct WorkspaceIndex {
 }
 
 impl WorkspaceIndex {
+    fn new() -> Self {
+        Self {
+            definitions: HashMap::new(),
+        }
+    }
+
     fn build(root: &Path) -> io::Result<Self> {
         let rb_files = crate::collect_rb_files(root)?;
         log(format_args!("found {} .rb files", rb_files.len()));
 
-        let mut definitions: HashMap<String, Vec<LocationInfo>> = HashMap::new();
+        let mut index = Self::new();
 
         for file_path in &rb_files {
             let source = match fs::read(file_path) {
@@ -44,28 +51,51 @@ impl WorkspaceIndex {
                     continue;
                 }
             };
-
-            let defs = indexer::index_source(&source);
-            if defs.is_empty() {
-                continue;
-            }
-
-            let line_index = LineIndex::new(&source);
-            for def in &defs {
-                let (line, col) = line_index.line_col(def.offset);
-                definitions
-                    .entry(def.fqn.clone())
-                    .or_default()
-                    .push(LocationInfo {
-                        path: file_path.clone(),
-                        kind: def.kind.clone(),
-                        line: line as u32,
-                        col: col as u32,
-                    });
-            }
+            index.index_file(file_path, &source);
         }
 
-        Ok(Self { definitions })
+        Ok(index)
+    }
+
+    fn index_file(&mut self, path: &Path, source: &[u8]) {
+        let defs = indexer::index_source(source);
+        if defs.is_empty() {
+            return;
+        }
+
+        let line_index = LineIndex::new(source);
+        for def in &defs {
+            let (line, col) = line_index.line_col(def.offset);
+            self.definitions
+                .entry(def.fqn.clone())
+                .or_default()
+                .push(LocationInfo {
+                    path: path.to_owned(),
+                    kind: def.kind.clone(),
+                    line: line as u32,
+                    col: col as u32,
+                });
+        }
+    }
+
+    fn remove_file(&mut self, path: &Path) {
+        self.definitions.retain(|_fqn, locations| {
+            locations.retain(|loc| loc.path != *path);
+            !locations.is_empty()
+        });
+    }
+
+    fn update_file(&mut self, path: &Path) {
+        self.remove_file(path);
+        match fs::read(path) {
+            Ok(source) => {
+                self.index_file(path, &source);
+                log(format_args!("re-indexed {}", path.display()));
+            }
+            Err(e) => {
+                log(format_args!("warning: failed to read {}: {e}", path.display()));
+            }
+        }
     }
 
     fn lookup(&self, fqn: &str) -> Vec<Location> {
@@ -137,6 +167,12 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     let server_capabilities = serde_json::to_value(ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        text_document_sync: Some(TextDocumentSyncCapability::Options(
+            TextDocumentSyncOptions {
+                save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                ..Default::default()
+            },
+        )),
         ..Default::default()
     })?;
     log(format_args!("server capabilities: {server_capabilities}"));
@@ -175,7 +211,7 @@ fn main_loop(
 
     let root = root_path.expect("failed to determine workspace root");
     log(format_args!("indexing {}", root.display()));
-    let index = WorkspaceIndex::build(&root)?;
+    let mut index = WorkspaceIndex::build(&root)?;
 
     let def_count: usize = index.definitions.values().map(|v| v.len()).sum();
     log(format_args!(
@@ -231,6 +267,11 @@ fn main_loop(
             }
             Message::Notification(not) => {
                 log(format_args!("notification: method={}", not.method));
+                if let Ok(params) = cast_notification::<DidSaveTextDocument>(not)
+                    && let Some(path) = uri_to_path(&params.text_document.uri)
+                {
+                    index.update_file(&path);
+                }
             }
         }
     }
@@ -311,4 +352,99 @@ where
     R::Params: serde::de::DeserializeOwned,
 {
     req.extract(R::METHOD)
+}
+
+fn cast_notification<N>(not: Notification) -> Result<N::Params, ExtractError<Notification>>
+where
+    N: lsp_types::notification::Notification,
+    N::Params: serde::de::DeserializeOwned,
+{
+    not.extract(N::METHOD)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lookup_fqns(index: &WorkspaceIndex, fqn: &str) -> Vec<(PathBuf, u32, u32)> {
+        let Some(locations) = index.definitions.get(fqn) else {
+            return Vec::new();
+        };
+        locations
+            .iter()
+            .map(|loc| (loc.path.clone(), loc.line, loc.col))
+            .collect()
+    }
+
+    #[test]
+    fn index_file_and_lookup() {
+        let mut index = WorkspaceIndex::new();
+        let source = b"module Foo\n  class Bar\n  end\nend\n";
+        index.index_file(Path::new("a.rb"), source);
+
+        let locs = lookup_fqns(&index, "Foo");
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].0, Path::new("a.rb"));
+
+        let locs = lookup_fqns(&index, "Foo::Bar");
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].0, Path::new("a.rb"));
+    }
+
+    #[test]
+    fn update_file_replaces_definitions() {
+        let mut index = WorkspaceIndex::new();
+        let path = Path::new("a.rb");
+
+        index.index_file(path, b"class Foo\nend\n");
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
+
+        // Simulate update: remove + re-index with new content
+        index.remove_file(path);
+        index.index_file(path, b"class Foo\n  def hello\n  end\nend\n");
+
+        let locs = lookup_fqns(&index, "Foo");
+        assert_eq!(locs.len(), 1);
+        let locs = lookup_fqns(&index, "Foo#hello");
+        assert_eq!(locs.len(), 1);
+    }
+
+    #[test]
+    fn update_file_removes_stale_fqns() {
+        let mut index = WorkspaceIndex::new();
+        let path = Path::new("a.rb");
+
+        index.index_file(path, b"class Foo\nend\n");
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
+
+        index.remove_file(path);
+        index.index_file(path, b"class Bar\nend\n");
+
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 0);
+        assert_eq!(lookup_fqns(&index, "Bar").len(), 1);
+    }
+
+    #[test]
+    fn remove_file() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\nend\n");
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
+
+        index.remove_file(Path::new("a.rb"));
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 0);
+        assert!(index.definitions.is_empty());
+    }
+
+    #[test]
+    fn multiple_files_same_fqn() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Foo\nend\n");
+        assert_eq!(lookup_fqns(&index, "Foo").len(), 2);
+
+        index.remove_file(Path::new("a.rb"));
+        let locs = lookup_fqns(&index, "Foo");
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].0, Path::new("b.rb"));
+    }
 }
