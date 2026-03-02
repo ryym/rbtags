@@ -15,7 +15,7 @@ use lsp_types::{
 use crate::indexer;
 use crate::location::LineIndex;
 use crate::log::write as log;
-use crate::resolver;
+use crate::resolver::{self, Reference};
 
 const LOG_PATH: &str = "/tmp/rbtags.log";
 
@@ -112,6 +112,63 @@ impl WorkspaceIndex {
             .collect()
     }
 
+    fn lookup_method(&self, reference: &Reference, cursor_file: &Path) -> Vec<Location> {
+        let Reference::Method {
+            name,
+            receiver,
+            namespace,
+        } = reference
+        else {
+            return Vec::new();
+        };
+
+        let instance_suffix = format!("#{name}");
+        let class_suffix = format!(".{name}");
+
+        // Collect all method definitions matching the name
+        let mut candidates: Vec<(&LocationInfo, &str)> = Vec::new();
+        for (fqn, locations) in &self.definitions {
+            if fqn.ends_with(&instance_suffix) || fqn.ends_with(&class_suffix) {
+                for loc in locations {
+                    if loc.kind == indexer::DefinitionKind::Method {
+                        candidates.push((loc, fqn));
+                    }
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        // Score each candidate for priority sorting
+        let cursor_ns = namespace.join("::");
+        let guessed_class = match receiver {
+            resolver::MethodReceiver::Variable(var) => Some(snake_to_camel(var)),
+            _ => None,
+        };
+
+        candidates.sort_by_key(|(loc, fqn)| {
+            score_method_candidate(
+                fqn,
+                loc,
+                receiver,
+                &cursor_ns,
+                guessed_class.as_deref(),
+                cursor_file,
+            )
+        });
+
+        candidates
+            .iter()
+            .filter_map(|(loc, _fqn)| {
+                let uri = path_to_uri(&loc.path)?;
+                let pos = Position::new(loc.line, loc.col);
+                Some(Location::new(uri, Range::new(pos, pos)))
+            })
+            .collect()
+    }
+
     fn search(&self, query: &str) -> Vec<SymbolInformation> {
         let mut results = Vec::new();
         for (fqn, locations) in &self.definitions {
@@ -136,6 +193,87 @@ impl WorkspaceIndex {
         }
         results
     }
+}
+
+/// Lower score = higher priority.
+fn score_method_candidate(
+    fqn: &str,
+    loc: &LocationInfo,
+    receiver: &resolver::MethodReceiver,
+    cursor_ns: &str,
+    guessed_class: Option<&str>,
+    cursor_file: &Path,
+) -> (u8, u32) {
+    // Priority tier (lower = better)
+    let tier = match receiver {
+        // Constant receiver: exact FQN match (e.g., User.find → User.find)
+        resolver::MethodReceiver::Constant(constant) => {
+            if fqn.starts_with(constant) {
+                0
+            } else {
+                4
+            }
+        }
+        // self.bar or bare bar: prioritize current namespace
+        resolver::MethodReceiver::SelfRef | resolver::MethodReceiver::None => {
+            if !cursor_ns.is_empty() && fqn.starts_with(cursor_ns) {
+                1
+            } else {
+                4
+            }
+        }
+        // Variable receiver: guess class from variable name
+        resolver::MethodReceiver::Variable(_) => {
+            if let Some(class) = guessed_class {
+                if fqn.starts_with(class) {
+                    2
+                } else {
+                    4
+                }
+            } else {
+                4
+            }
+        }
+    };
+
+    // File distance as tiebreaker
+    let distance = file_distance(&loc.path, cursor_file);
+
+    (tier, distance)
+}
+
+fn file_distance(a: &Path, b: &Path) -> u32 {
+    if a == b {
+        return 0;
+    }
+    if a.parent() == b.parent() {
+        return 1;
+    }
+    // Count common prefix components
+    let a_components: Vec<_> = a.components().collect();
+    let b_components: Vec<_> = b.components().collect();
+    let common = a_components
+        .iter()
+        .zip(b_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let max_len = a_components.len().max(b_components.len());
+    (max_len - common) as u32
+}
+
+fn snake_to_camel(s: &str) -> String {
+    s.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    upper + chars.as_str()
+                }
+                None => String::new(),
+            }
+        })
+        .collect()
 }
 
 fn def_kind_to_symbol_kind(kind: &indexer::DefinitionKind) -> SymbolKind {
@@ -324,11 +462,15 @@ fn handle_goto_definition(
     let offset = line_index.offset(position.line as usize, position.character as usize);
     log(format_args!("  byte offset: {offset}"));
 
-    let fqn = resolver::resolve_reference(&source, offset);
-    log(format_args!("  resolved FQN: {fqn:?}"));
-    let fqn = fqn?;
+    let reference = resolver::resolve_reference(&source, offset);
+    log(format_args!("  resolved reference: {reference:?}"));
+    let reference = reference?;
 
-    let locations = index.lookup(&fqn);
+    let locations = match &reference {
+        Reference::Constant(fqn) => index.lookup(fqn),
+        Reference::Method { .. } => index.lookup_method(&reference, &file_path),
+    };
+
     log(format_args!("  found {} location(s)", locations.len()));
     for loc in &locations {
         log(format_args!(
@@ -446,5 +588,199 @@ mod tests {
         let locs = lookup_fqns(&index, "Foo");
         assert_eq!(locs.len(), 1);
         assert_eq!(locs[0].0, Path::new("b.rb"));
+    }
+
+    // --- Method lookup tests ---
+
+    fn lookup_method_fqns(
+        index: &WorkspaceIndex,
+        reference: &Reference,
+        cursor_file: &Path,
+    ) -> Vec<(PathBuf, String)> {
+        let Reference::Method { name, receiver, namespace } = reference else {
+            panic!("expected Method reference");
+        };
+
+        let instance_suffix = format!("#{name}");
+        let class_suffix = format!(".{name}");
+
+        let cursor_ns = namespace.join("::");
+        let guessed_class = match receiver {
+            resolver::MethodReceiver::Variable(var) => Some(snake_to_camel(var)),
+            _ => None,
+        };
+
+        let mut candidates: Vec<(&LocationInfo, &str)> = Vec::new();
+        for (fqn, locations) in &index.definitions {
+            if fqn.ends_with(&instance_suffix) || fqn.ends_with(&class_suffix) {
+                for loc in locations {
+                    if loc.kind == indexer::DefinitionKind::Method {
+                        candidates.push((loc, fqn));
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by_key(|(loc, fqn)| {
+            score_method_candidate(
+                fqn,
+                loc,
+                receiver,
+                &cursor_ns,
+                guessed_class.as_deref(),
+                cursor_file,
+            )
+        });
+
+        candidates
+            .iter()
+            .map(|(loc, fqn)| (loc.path.clone(), fqn.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn method_lookup_constant_receiver() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("app/models/user.rb"),
+            b"class User\n  def self.find\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("app/models/post.rb"),
+            b"class Post\n  def self.find\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "find".to_string(),
+            receiver: resolver::MethodReceiver::Constant("User".to_string()),
+            namespace: vec![],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("app/controllers/test.rb"));
+        assert_eq!(results[0].1, "User.find");
+    }
+
+    #[test]
+    fn method_lookup_same_namespace() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class Foo\n  def bar\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Baz\n  def bar\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "bar".to_string(),
+            receiver: resolver::MethodReceiver::None,
+            namespace: vec!["Foo".to_string()],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results[0].1, "Foo#bar");
+    }
+
+    #[test]
+    fn method_lookup_variable_guess() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class User\n  def save\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Post\n  def save\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "save".to_string(),
+            receiver: resolver::MethodReceiver::Variable("user".to_string()),
+            namespace: vec![],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results[0].1, "User#save");
+    }
+
+    #[test]
+    fn method_lookup_variable_snake_case() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class OrderItem\n  def total\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Invoice\n  def total\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "total".to_string(),
+            receiver: resolver::MethodReceiver::Variable("order_item".to_string()),
+            namespace: vec![],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results[0].1, "OrderItem#total");
+    }
+
+    #[test]
+    fn method_lookup_fallback_returns_all() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class Foo\n  def bar\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Baz\n  def bar\n  end\nend\n",
+        );
+
+        // Unknown receiver - should return all candidates
+        let reference = Reference::Method {
+            name: "bar".to_string(),
+            receiver: resolver::MethodReceiver::None,
+            namespace: vec![],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results.len(), 2);
+    }
+
+    // --- Utility tests ---
+
+    #[test]
+    fn test_snake_to_camel() {
+        assert_eq!(snake_to_camel("user"), "User");
+        assert_eq!(snake_to_camel("order_item"), "OrderItem");
+        assert_eq!(snake_to_camel("foo_bar_baz"), "FooBarBaz");
+    }
+
+    #[test]
+    fn test_file_distance_same_file() {
+        assert_eq!(file_distance(Path::new("a.rb"), Path::new("a.rb")), 0);
+    }
+
+    #[test]
+    fn test_file_distance_same_dir() {
+        assert_eq!(
+            file_distance(Path::new("app/a.rb"), Path::new("app/b.rb")),
+            1
+        );
+    }
+
+    #[test]
+    fn test_file_distance_different_dirs() {
+        let d1 = file_distance(
+            Path::new("app/models/user.rb"),
+            Path::new("app/controllers/users.rb"),
+        );
+        let d2 = file_distance(
+            Path::new("app/models/user.rb"),
+            Path::new("lib/tasks/seed.rb"),
+        );
+        assert!(d1 < d2);
     }
 }
