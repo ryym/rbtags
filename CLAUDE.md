@@ -24,3 +24,8 @@ cargo run -- lsp           # Start LSP server (stdio)
 - Tests are inline (`#[cfg(test)] mod tests` in each module)
 - `resolver.rs` uses ruby-prism's `Visit` trait for full AST traversal
 - `indexer.rs` uses manual node matching (only needs structural nodes)
+
+## Development
+
+- Update specs in `docs/specs/` whenever you change the tool behavior
+  - Don't mention internal details and focus behaviors that can be observed externally
