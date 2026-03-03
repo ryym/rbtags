@@ -9,11 +9,40 @@ Status legend:
 
 ## Constant Jump
 
+### Basic Behavior
+
 - [x] Resolve the constant reference at the cursor position to a fully qualified name (FQN) and jump to its definition
 - [x] Resolve the entire `Foo::Bar` regardless of where the cursor sits within the token (widest match)
 - [x] Correctly resolve nested definitions (`module Foo; module Bar; end; end`)
 - [x] Correctly resolve inline definitions (`class Foo::Bar`)
 - [x] Return all candidates when multiple files define the same FQN
+
+### Nesting-Aware Resolution
+
+When the constant reference is not fully qualified, resolve it using the enclosing namespace context, emulating Ruby's constant nesting lookup.
+
+- [x] Walk outward from the current namespace (e.g., `Bar` inside `A::B` tries `A::B::Bar` → `A::Bar` → `Bar`)
+- [x] Partially qualified paths also use nesting (e.g., `Foo::Bar` inside `X` tries `X::Foo::Bar` → `Foo::Bar`)
+
+```ruby
+class Foo
+  class Bar; end
+  def foo
+    Bar.new  # resolves to Foo::Bar via nesting
+  end
+end
+```
+
+### Suffix Match Fallback
+
+When nesting resolution finds no candidates, fall back to matching any FQN ending with the constant name.
+
+- [x] Match any FQN ending with `::{name}` (e.g., `Bar` matches `Foo::Bar`, `Baz::Bar`, etc.)
+- [x] Sort suffix-matched candidates by file distance
+
+### File Distance Priority
+
+- [x] Among candidates at the same nesting/suffix tier, prioritize definitions closer to the current file
 
 ## Method Jump
 
