@@ -4,7 +4,10 @@ use crate::indexer::resolve_constant_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
-    Constant(String),
+    Constant {
+        name: String,
+        namespace: Vec<String>,
+    },
     Method {
         name: String,
         receiver: MethodReceiver,
@@ -84,7 +87,10 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             let node = node.as_node();
             let parts = resolve_constant_path(&node);
             if !parts.is_empty() {
-                self.result = Some(Reference::Constant(parts.join("::")));
+                self.result = Some(Reference::Constant {
+                    name: parts.join("::"),
+                    namespace: self.namespace.clone(),
+                });
                 return;
             }
         }
@@ -125,7 +131,10 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             let loc = n.location();
             if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
                 let name = std::str::from_utf8(n.name().as_slice()).unwrap();
-                self.result = Some(Reference::Constant(name.to_string()));
+                self.result = Some(Reference::Constant {
+                    name: name.to_string(),
+                    namespace: self.namespace.clone(),
+                });
             }
         }
     }
@@ -179,7 +188,17 @@ mod tests {
     }
 
     fn constant(s: &str) -> Option<Reference> {
-        Some(Reference::Constant(s.to_string()))
+        Some(Reference::Constant {
+            name: s.to_string(),
+            namespace: vec![],
+        })
+    }
+
+    fn constant_in(s: &str, ns: &[&str]) -> Option<Reference> {
+        Some(Reference::Constant {
+            name: s.to_string(),
+            namespace: ns.iter().map(|s| s.to_string()).collect(),
+        })
     }
 
     fn method(name: &str, receiver: MethodReceiver, namespace: &[&str]) -> Option<Reference> {
@@ -224,7 +243,7 @@ mod tests {
     #[test]
     fn constant_inside_class_body() {
         let src = b"class Foo\n  Bar\nend";
-        assert_eq!(resolve(src, 12), constant("Bar"));
+        assert_eq!(resolve(src, 12), constant_in("Bar", &["Foo"]));
     }
 
     #[test]
@@ -294,6 +313,18 @@ mod tests {
     fn constant_in_hash_value() {
         let src = b"{ a: Foo::Bar }";
         assert_eq!(resolve(src, 5), constant("Foo::Bar"));
+    }
+
+    #[test]
+    fn constant_namespace_tracking() {
+        let src = b"module A\n  module B\n    Bar\n  end\nend";
+        assert_eq!(resolve(src, 24), constant_in("Bar", &["A", "B"]));
+    }
+
+    #[test]
+    fn constant_path_with_namespace() {
+        let src = b"module A\n  Foo::Bar\nend";
+        assert_eq!(resolve(src, 12), constant_in("Foo::Bar", &["A"]));
     }
 
     // --- Method call tests ---

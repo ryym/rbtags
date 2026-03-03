@@ -98,13 +98,61 @@ impl WorkspaceIndex {
         }
     }
 
-    fn lookup(&self, fqn: &str) -> Vec<Location> {
-        let Some(locations) = self.definitions.get(fqn) else {
+    fn lookup_constant(&self, reference: &Reference, cursor_file: &Path) -> Vec<Location> {
+        let Reference::Constant { name, namespace } = reference else {
             return Vec::new();
         };
-        locations
+
+        let mut candidates: Vec<(&LocationInfo, &str)> = Vec::new();
+
+        // Tier 1: Nesting-aware resolution (Ruby's constant lookup order).
+        // For name="Bar" with namespace=["A","B"], try "A::B::Bar", "A::Bar", "Bar".
+        let nesting_fqns = build_nesting_candidates(name, namespace);
+        for candidate_fqn in &nesting_fqns {
+            if let Some(locations) = self.definitions.get(candidate_fqn.as_str()) {
+                for loc in locations {
+                    candidates.push((loc, candidate_fqn));
+                }
+            }
+        }
+
+        if !candidates.is_empty() {
+            let fqn_order: HashMap<&str, usize> = nesting_fqns
+                .iter()
+                .enumerate()
+                .map(|(i, fqn)| (fqn.as_str(), i))
+                .collect();
+
+            candidates.sort_by_key(|(loc, fqn)| {
+                let nesting_rank = fqn_order.get(fqn).copied().unwrap_or(usize::MAX);
+                (nesting_rank, file_distance(&loc.path, cursor_file))
+            });
+
+            return candidates
+                .iter()
+                .filter_map(|(loc, _)| {
+                    let uri = path_to_uri(&loc.path)?;
+                    let pos = Position::new(loc.line, loc.col);
+                    Some(Location::new(uri, Range::new(pos, pos)))
+                })
+                .collect();
+        }
+
+        // Tier 2: Suffix match fallback — any FQN ending with ::{name} or equal to {name}.
+        let suffix = format!("::{name}");
+        for (fqn, locations) in &self.definitions {
+            if fqn.ends_with(&suffix) || fqn == name {
+                for loc in locations {
+                    candidates.push((loc, fqn));
+                }
+            }
+        }
+
+        candidates.sort_by_key(|(loc, _fqn)| file_distance(&loc.path, cursor_file));
+
+        candidates
             .iter()
-            .filter_map(|loc| {
+            .filter_map(|(loc, _)| {
                 let uri = path_to_uri(&loc.path)?;
                 let pos = Position::new(loc.line, loc.col);
                 Some(Location::new(uri, Range::new(pos, pos)))
@@ -193,6 +241,22 @@ impl WorkspaceIndex {
         }
         results
     }
+}
+
+/// Build candidate FQNs by walking outward from the current namespace.
+/// For name="Bar" with namespace=["A","B"], returns ["A::B::Bar", "A::Bar", "Bar"].
+fn build_nesting_candidates(name: &str, namespace: &[String]) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for i in (0..=namespace.len()).rev() {
+        let prefix = &namespace[..i];
+        let candidate = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}::{}", prefix.join("::"), name)
+        };
+        candidates.push(candidate);
+    }
+    candidates
 }
 
 /// Lower score = higher priority.
@@ -467,7 +531,7 @@ fn handle_goto_definition(
     let reference = reference?;
 
     let locations = match &reference {
-        Reference::Constant(fqn) => index.lookup(fqn),
+        Reference::Constant { .. } => index.lookup_constant(&reference, &file_path),
         Reference::Method { .. } => index.lookup_method(&reference, &file_path),
     };
 
@@ -747,6 +811,148 @@ mod tests {
 
         let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
         assert_eq!(results.len(), 2);
+    }
+
+    // --- Constant lookup tests ---
+
+    fn lookup_constant_fqns(
+        index: &WorkspaceIndex,
+        name: &str,
+        namespace: &[&str],
+        cursor_file: &Path,
+    ) -> Vec<(PathBuf, String)> {
+        let reference = Reference::Constant {
+            name: name.to_string(),
+            namespace: namespace.iter().map(|s| s.to_string()).collect(),
+        };
+
+        let Reference::Constant {
+            name: ref_name,
+            namespace: ref_ns,
+        } = &reference
+        else {
+            unreachable!();
+        };
+
+        let mut candidates: Vec<(&LocationInfo, &str)> = Vec::new();
+
+        let nesting_fqns = build_nesting_candidates(ref_name, ref_ns);
+        for candidate_fqn in &nesting_fqns {
+            if let Some(locations) = index.definitions.get(candidate_fqn.as_str()) {
+                for loc in locations {
+                    candidates.push((loc, candidate_fqn));
+                }
+            }
+        }
+
+        if !candidates.is_empty() {
+            let fqn_order: HashMap<&str, usize> = nesting_fqns
+                .iter()
+                .enumerate()
+                .map(|(i, fqn)| (fqn.as_str(), i))
+                .collect();
+
+            candidates.sort_by_key(|(loc, fqn)| {
+                let nesting_rank = fqn_order.get(fqn).copied().unwrap_or(usize::MAX);
+                (nesting_rank, file_distance(&loc.path, cursor_file))
+            });
+
+            return candidates
+                .iter()
+                .map(|(loc, fqn)| (loc.path.clone(), fqn.to_string()))
+                .collect();
+        }
+
+        let suffix = format!("::{ref_name}");
+        for (fqn, locations) in &index.definitions {
+            if fqn.ends_with(&suffix) || fqn == ref_name {
+                for loc in locations {
+                    candidates.push((loc, fqn));
+                }
+            }
+        }
+
+        candidates.sort_by_key(|(loc, _)| file_distance(&loc.path, cursor_file));
+
+        candidates
+            .iter()
+            .map(|(loc, fqn)| (loc.path.clone(), fqn.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn constant_lookup_exact_match() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+
+        // "Foo::Bar" with no namespace → exact nesting match
+        let results = lookup_constant_fqns(&index, "Foo::Bar", &[], Path::new("b.rb"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "Foo::Bar");
+    }
+
+    #[test]
+    fn constant_lookup_nesting_resolution() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Baz\n  class Bar\n  end\nend\n");
+
+        // "Bar" inside namespace ["Foo"] → prefers "Foo::Bar"
+        let results = lookup_constant_fqns(&index, "Bar", &["Foo"], Path::new("c.rb"));
+        assert_eq!(results[0].1, "Foo::Bar");
+    }
+
+    #[test]
+    fn constant_lookup_nested_outward() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"module A\n  class Bar\n  end\n  module B\n    class Bar\n    end\n  end\nend\n",
+        );
+
+        // "Bar" inside ["A", "B"] → prefers "A::B::Bar" over "A::Bar"
+        let results = lookup_constant_fqns(&index, "Bar", &["A", "B"], Path::new("c.rb"));
+        assert_eq!(results[0].1, "A::B::Bar");
+        assert_eq!(results[1].1, "A::Bar");
+    }
+
+    #[test]
+    fn constant_lookup_suffix_fallback() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+
+        // "Bar" inside namespace ["X"] (no X::Bar) → falls back to suffix match
+        let results = lookup_constant_fqns(&index, "Bar", &["X"], Path::new("c.rb"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "Foo::Bar");
+    }
+
+    #[test]
+    fn constant_lookup_already_qualified() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"module X\n  class Foo\n    class Bar\n    end\n  end\nend\n",
+        );
+        index.index_file(Path::new("b.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+
+        // "Foo::Bar" inside namespace ["X"] → tries "X::Foo::Bar" first, then "Foo::Bar"
+        let results = lookup_constant_fqns(&index, "Foo::Bar", &["X"], Path::new("c.rb"));
+        assert_eq!(results[0].1, "X::Foo::Bar");
+        assert_eq!(results[1].1, "Foo::Bar");
+    }
+
+    #[test]
+    fn test_build_nesting_candidates() {
+        let ns = vec!["A".to_string(), "B".to_string()];
+        let candidates = build_nesting_candidates("Bar", &ns);
+        assert_eq!(candidates, vec!["A::B::Bar", "A::Bar", "Bar"]);
+
+        let candidates = build_nesting_candidates("Bar", &[]);
+        assert_eq!(candidates, vec!["Bar"]);
+
+        let candidates = build_nesting_candidates("Foo::Bar", &ns);
+        assert_eq!(candidates, vec!["A::B::Foo::Bar", "A::Foo::Bar", "Foo::Bar"]);
     }
 
     // --- Utility tests ---
