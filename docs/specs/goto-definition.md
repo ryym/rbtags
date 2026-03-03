@@ -9,6 +9,12 @@ Status legend:
 
 ## Constant Jump
 
+### Indexing
+
+- [x] Index constant assignments (`ABC = 1`) as definitions with their FQN
+- [x] Index path-qualified constant assignments (`Foo::BAR = 2`)
+- [ ] Index constants in multi-assignment (`A, B = 1, 2`)
+
 ### Basic Behavior
 
 - [x] Resolve the constant reference at the cursor position to a fully qualified name (FQN) and jump to its definition

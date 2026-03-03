@@ -345,6 +345,7 @@ fn def_kind_to_symbol_kind(kind: &indexer::DefinitionKind) -> SymbolKind {
         indexer::DefinitionKind::Module => SymbolKind::MODULE,
         indexer::DefinitionKind::Class => SymbolKind::CLASS,
         indexer::DefinitionKind::Method => SymbolKind::METHOD,
+        indexer::DefinitionKind::Constant => SymbolKind::CONSTANT,
     }
 }
 

@@ -5,6 +5,7 @@ pub enum DefinitionKind {
     Module,
     Class,
     Method,
+    Constant,
 }
 
 #[derive(Debug)]
@@ -59,6 +60,25 @@ fn visit(node: &Node<'_>, namespace: &[String], in_singleton: bool, defs: &mut V
     } else if let Some(n) = node.as_singleton_class_node() {
         if let Some(body) = n.body() {
             visit(&body, namespace, true, defs);
+        }
+    } else if let Some(n) = node.as_constant_write_node() {
+        let name = std::str::from_utf8(n.name().as_slice()).unwrap().to_string();
+        let fqn = build_fqn(namespace, &[name]);
+        defs.push(Definition {
+            fqn,
+            kind: DefinitionKind::Constant,
+            offset: n.location().start_offset(),
+        });
+    } else if let Some(n) = node.as_constant_path_write_node() {
+        let target = n.target();
+        let parts = resolve_constant_path(&target.as_node());
+        if !parts.is_empty() {
+            let fqn = build_fqn(namespace, &parts);
+            defs.push(Definition {
+                fqn,
+                kind: DefinitionKind::Constant,
+                offset: n.location().start_offset(),
+            });
         }
     } else if let Some(n) = node.as_def_node() {
         let method_name = std::str::from_utf8(n.name().as_slice()).unwrap();
@@ -157,6 +177,35 @@ mod tests {
         let defs = index_source(b"module A\n  class B::C\n  end\nend");
         let fqns: Vec<&str> = defs.iter().map(|d| d.fqn.as_str()).collect();
         assert_eq!(fqns, ["A", "A::B::C"]);
+    }
+
+    #[test]
+    fn constant_in_class() {
+        let defs = index_source(b"class Foo\n  ABC = 1\nend");
+        assert_eq!(defs[1].fqn, "Foo::ABC");
+        assert_eq!(defs[1].kind, DefinitionKind::Constant);
+    }
+
+    #[test]
+    fn top_level_constant() {
+        let defs = index_source(b"ABC = 1");
+        assert_eq!(defs[0].fqn, "ABC");
+        assert_eq!(defs[0].kind, DefinitionKind::Constant);
+    }
+
+    #[test]
+    fn constant_path_write() {
+        let defs = index_source(b"Foo::BAR = 2");
+        assert_eq!(defs[0].fqn, "Foo::BAR");
+        assert_eq!(defs[0].kind, DefinitionKind::Constant);
+    }
+
+    #[test]
+    fn constant_in_nested_module() {
+        let defs = index_source(b"module A\n  module B\n    X = 1\n  end\nend");
+        let fqns: Vec<&str> = defs.iter().map(|d| d.fqn.as_str()).collect();
+        assert_eq!(fqns, ["A", "A::B", "A::B::X"]);
+        assert_eq!(defs[2].kind, DefinitionKind::Constant);
     }
 
     #[test]

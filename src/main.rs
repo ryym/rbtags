@@ -62,6 +62,7 @@ fn run_dump(path: &Path) {
                 DefinitionKind::Module => "module",
                 DefinitionKind::Class => "class",
                 DefinitionKind::Method => "method",
+                DefinitionKind::Constant => "constant",
             };
             println!("{}\t{}\t{}:{}", def.fqn, kind, file_path.display(), line + 1);
         }
