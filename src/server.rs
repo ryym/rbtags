@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 
+use rayon::prelude::*;
+
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     notification::DidSaveTextDocument, request::GotoDefinition, request::WorkspaceSymbolRequest,
@@ -38,21 +40,55 @@ impl WorkspaceIndex {
     }
 
     fn build(root: &Path) -> io::Result<Self> {
+        let t_start = std::time::Instant::now();
         let rb_files = crate::collect_rb_files(root)?;
         log(format_args!("found {} .rb files", rb_files.len()));
 
-        let mut index = Self::new();
-
-        for file_path in &rb_files {
-            let source = match fs::read(file_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    log(format_args!("warning: failed to read {}: {e}", file_path.display()));
-                    continue;
+        let file_results: Vec<_> = rb_files
+            .par_iter()
+            .filter_map(|file_path| {
+                let source = match fs::read(file_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log(format_args!(
+                            "warning: failed to read {}: {e}",
+                            file_path.display()
+                        ));
+                        return None;
+                    }
+                };
+                let defs = indexer::index_source(&source);
+                if defs.is_empty() {
+                    return None;
                 }
-            };
-            index.index_file(file_path, &source);
+                let line_index = crate::location::LineIndex::new(&source);
+                let locations: Vec<_> = defs
+                    .iter()
+                    .map(|def| {
+                        let (line, col) = line_index.line_col(def.offset);
+                        (
+                            def.fqn.clone(),
+                            LocationInfo {
+                                path: file_path.to_owned(),
+                                kind: def.kind.clone(),
+                                line: line as u32,
+                                col: col as u32,
+                            },
+                        )
+                    })
+                    .collect();
+                Some(locations)
+            })
+            .collect();
+
+        let mut index = Self::new();
+        for file_locs in file_results {
+            for (fqn, loc) in file_locs {
+                index.definitions.entry(fqn).or_default().push(loc);
+            }
         }
+
+        log(format_args!("build completed in {:?}", t_start.elapsed()));
 
         Ok(index)
     }
