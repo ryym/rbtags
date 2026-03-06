@@ -1,7 +1,10 @@
 # https://lefthook.dev/configuration/index.html
 pre-commit:
-  parallel: true
   jobs:
+    - run: cargo fmt
+      stage_fixed: true
+      glob:
+        - "*.rs"
     - run: cargo clippy
       glob:
         - "*.rs"
