@@ -63,14 +63,14 @@ impl WorkspaceIndex {
                 }
                 let line_index = crate::location::LineIndex::new(&source);
                 let locations: Vec<_> = defs
-                    .iter()
+                    .into_iter()
                     .map(|def| {
                         let (line, col) = line_index.line_col(def.offset);
                         (
-                            def.fqn.clone(),
+                            def.fqn,
                             LocationInfo {
                                 path: file_path.to_owned(),
-                                kind: def.kind.clone(),
+                                kind: def.kind,
                                 line: line as u32,
                                 col: col as u32,
                             },
@@ -100,14 +100,14 @@ impl WorkspaceIndex {
         }
 
         let line_index = LineIndex::new(source);
-        for def in &defs {
+        for def in defs {
             let (line, col) = line_index.line_col(def.offset);
             self.definitions
-                .entry(def.fqn.clone())
+                .entry(def.fqn)
                 .or_default()
                 .push(LocationInfo {
                     path: path.to_owned(),
-                    kind: def.kind.clone(),
+                    kind: def.kind,
                     line: line as u32,
                     col: col as u32,
                 });
