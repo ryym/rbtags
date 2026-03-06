@@ -573,6 +573,107 @@ mod tests {
     }
 
     #[test]
+    fn method_lookup_self_receiver() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
+
+        let reference = Reference::Method {
+            name: "bar".to_string(),
+            receiver: resolver::MethodReceiver::SelfRef,
+            namespace: vec!["Foo".to_string()],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results[0].1, "Foo#bar");
+    }
+
+    #[test]
+    fn method_lookup_namespaced_constant_receiver() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class Foo\n  class Bar\n    def self.create\n    end\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Baz\n  def self.create\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "create".to_string(),
+            receiver: resolver::MethodReceiver::Constant("Foo::Bar".to_string()),
+            namespace: vec![],
+        };
+
+        let results = lookup_method_fqns(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results[0].1, "Foo::Bar.create");
+    }
+
+    #[test]
+    fn method_lookup_variable_guess_no_match() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(Path::new("a.rb"), b"class Foo\n  def save\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Bar\n  def save\n  end\nend\n");
+
+        // Variable "unknown" → guesses "Unknown" which matches nothing → returns all
+        let reference = Reference::Method {
+            name: "save".to_string(),
+            receiver: resolver::MethodReceiver::Variable("unknown".to_string()),
+            namespace: vec![],
+        };
+
+        let results = lookup_method_paths(&index, &reference, Path::new("c.rb"));
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn method_lookup_file_distance_same_file_wins() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("app/models/user.rb"),
+            b"class User\n  def foo\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("lib/other.rb"),
+            b"class Other\n  def foo\n  end\nend\n",
+        );
+
+        // No receiver, no namespace → all tier 4 → sorted by file distance
+        let reference = Reference::Method {
+            name: "foo".to_string(),
+            receiver: resolver::MethodReceiver::None,
+            namespace: vec![],
+        };
+
+        let results = lookup_method_paths(&index, &reference, Path::new("app/models/user.rb"));
+        assert_eq!(results[0], Path::new("app/models/user.rb"));
+    }
+
+    #[test]
+    fn method_lookup_file_distance_same_dir_beats_different_dir() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("app/models/post.rb"),
+            b"class Post\n  def foo\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("lib/utils/helper.rb"),
+            b"class Helper\n  def foo\n  end\nend\n",
+        );
+
+        let reference = Reference::Method {
+            name: "foo".to_string(),
+            receiver: resolver::MethodReceiver::None,
+            namespace: vec![],
+        };
+
+        // Cursor in app/models/user.rb → app/models/post.rb (same dir) wins
+        let results = lookup_method_paths(&index, &reference, Path::new("app/models/user.rb"));
+        assert_eq!(results[0], Path::new("app/models/post.rb"));
+    }
+
+    #[test]
     fn method_lookup_fallback_returns_all() {
         let mut index = WorkspaceIndex::new();
         index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
