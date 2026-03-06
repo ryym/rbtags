@@ -3,6 +3,7 @@ pub mod location;
 pub mod log;
 pub mod resolver;
 pub mod server;
+pub mod workspace;
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
