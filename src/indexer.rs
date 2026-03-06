@@ -62,7 +62,9 @@ fn visit(node: &Node<'_>, namespace: &[String], in_singleton: bool, defs: &mut V
             visit(&body, namespace, true, defs);
         }
     } else if let Some(n) = node.as_constant_write_node() {
-        let name = std::str::from_utf8(n.name().as_slice()).unwrap().to_string();
+        let name = std::str::from_utf8(n.name().as_slice())
+            .unwrap()
+            .to_string();
         let fqn = build_fqn(namespace, &[name]);
         defs.push(Definition {
             fqn,
@@ -103,7 +105,11 @@ fn visit(node: &Node<'_>, namespace: &[String], in_singleton: bool, defs: &mut V
 
 pub fn resolve_constant_path(node: &Node<'_>) -> Vec<String> {
     if let Some(n) = node.as_constant_read_node() {
-        vec![std::str::from_utf8(n.name().as_slice()).unwrap().to_string()]
+        vec![
+            std::str::from_utf8(n.name().as_slice())
+                .unwrap()
+                .to_string(),
+        ]
     } else if let Some(n) = node.as_constant_path_node() {
         let mut parts = match n.parent() {
             Some(parent) => resolve_constant_path(&parent),

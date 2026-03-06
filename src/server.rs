@@ -8,10 +8,10 @@ use rayon::prelude::*;
 
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    notification::DidSaveTextDocument, request::GotoDefinition, request::WorkspaceSymbolRequest,
-    GotoDefinitionResponse, InitializeParams, Location, OneOf, Position, Range,
-    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri, WorkspaceSymbolResponse,
+    GotoDefinitionResponse, InitializeParams, Location, OneOf, Position, Range, ServerCapabilities,
+    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, Uri, WorkspaceSymbolResponse, notification::DidSaveTextDocument,
+    request::GotoDefinition, request::WorkspaceSymbolRequest,
 };
 
 use crate::indexer;
@@ -129,7 +129,10 @@ impl WorkspaceIndex {
                 log(format_args!("re-indexed {}", path.display()));
             }
             Err(e) => {
-                log(format_args!("warning: failed to read {}: {e}", path.display()));
+                log(format_args!(
+                    "warning: failed to read {}: {e}",
+                    path.display()
+                ));
             }
         }
     }
@@ -325,11 +328,7 @@ fn score_method_candidate(
         // Variable receiver: guess class from variable name
         resolver::MethodReceiver::Variable(_) => {
             if let Some(class) = guessed_class {
-                if fqn.starts_with(class) {
-                    2
-                } else {
-                    4
-                }
+                if fqn.starts_with(class) { 2 } else { 4 }
             } else {
                 4
             }
@@ -698,7 +697,12 @@ mod tests {
         reference: &Reference,
         cursor_file: &Path,
     ) -> Vec<(PathBuf, String)> {
-        let Reference::Method { name, receiver, namespace } = reference else {
+        let Reference::Method {
+            name,
+            receiver,
+            namespace,
+        } = reference
+        else {
             panic!("expected Method reference");
         };
 
@@ -764,14 +768,8 @@ mod tests {
     #[test]
     fn method_lookup_same_namespace() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(
-            Path::new("a.rb"),
-            b"class Foo\n  def bar\n  end\nend\n",
-        );
-        index.index_file(
-            Path::new("b.rb"),
-            b"class Baz\n  def bar\n  end\nend\n",
-        );
+        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
 
         let reference = Reference::Method {
             name: "bar".to_string(),
@@ -786,14 +784,8 @@ mod tests {
     #[test]
     fn method_lookup_variable_guess() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(
-            Path::new("a.rb"),
-            b"class User\n  def save\n  end\nend\n",
-        );
-        index.index_file(
-            Path::new("b.rb"),
-            b"class Post\n  def save\n  end\nend\n",
-        );
+        index.index_file(Path::new("a.rb"), b"class User\n  def save\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Post\n  def save\n  end\nend\n");
 
         let reference = Reference::Method {
             name: "save".to_string(),
@@ -830,14 +822,8 @@ mod tests {
     #[test]
     fn method_lookup_fallback_returns_all() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(
-            Path::new("a.rb"),
-            b"class Foo\n  def bar\n  end\nend\n",
-        );
-        index.index_file(
-            Path::new("b.rb"),
-            b"class Baz\n  def bar\n  end\nend\n",
-        );
+        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
+        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
 
         // Unknown receiver - should return all candidates
         let reference = Reference::Method {
@@ -989,7 +975,10 @@ mod tests {
         assert_eq!(candidates, vec!["Bar"]);
 
         let candidates = build_nesting_candidates("Foo::Bar", &ns);
-        assert_eq!(candidates, vec!["A::B::Foo::Bar", "A::Foo::Bar", "Foo::Bar"]);
+        assert_eq!(
+            candidates,
+            vec!["A::B::Foo::Bar", "A::Foo::Bar", "Foo::Bar"]
+        );
     }
 
     // --- Utility tests ---

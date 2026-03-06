@@ -1,4 +1,6 @@
-use ruby_prism::{CallNode, ClassNode, ConstantPathNode, ModuleNode, Node, SingletonClassNode, Visit};
+use ruby_prism::{
+    CallNode, ClassNode, ConstantPathNode, ModuleNode, Node, SingletonClassNode, Visit,
+};
 
 use crate::indexer::resolve_constant_path;
 
@@ -160,7 +162,9 @@ fn classify_receiver(node: &CallNode<'_>) -> MethodReceiver {
 
     // variable.bar - extract variable name
     if let Some(n) = receiver.as_local_variable_read_node() {
-        let name = std::str::from_utf8(n.name().as_slice()).unwrap().to_string();
+        let name = std::str::from_utf8(n.name().as_slice())
+            .unwrap()
+            .to_string();
         return MethodReceiver::Variable(name);
     }
 
@@ -171,7 +175,9 @@ fn classify_receiver(node: &CallNode<'_>) -> MethodReceiver {
         && n.arguments().is_none()
         && n.block().is_none()
     {
-        let name = std::str::from_utf8(n.name().as_slice()).unwrap().to_string();
+        let name = std::str::from_utf8(n.name().as_slice())
+            .unwrap()
+            .to_string();
         return MethodReceiver::Variable(name);
     }
 
@@ -406,7 +412,11 @@ mod tests {
         let src = b"module A\n  class B\n    foo.bar\n  end\nend";
         assert_eq!(
             resolve(src, 27), // cursor on "bar"
-            method("bar", MethodReceiver::Variable("foo".to_string()), &["A", "B"])
+            method(
+                "bar",
+                MethodReceiver::Variable("foo".to_string()),
+                &["A", "B"]
+            )
         );
     }
 
@@ -416,10 +426,7 @@ mod tests {
         //  0123456789a
         let src = b"foo.bar.baz";
         // cursor on "baz" - receiver is a method chain, classify as None
-        assert_eq!(
-            resolve(src, 8),
-            method("baz", MethodReceiver::None, &[])
-        );
+        assert_eq!(resolve(src, 8), method("baz", MethodReceiver::None, &[]));
         // cursor on "bar" - receiver is variable "foo"
         assert_eq!(
             resolve(src, 4),
