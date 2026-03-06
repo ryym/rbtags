@@ -10,8 +10,10 @@ pub enum DefinitionKind {
 
 #[derive(Debug)]
 pub struct Definition {
+    /// Fully qualified name (e.g. "Foo::Bar", "Foo#bar", "Foo.bar").
     pub fqn: String,
     pub kind: DefinitionKind,
+    /// Byte offset of the definition in the source file.
     pub offset: usize,
 }
 

@@ -29,6 +29,7 @@ struct LocationInfo {
 }
 
 struct WorkspaceIndex {
+    /// Map from FQN (e.g. "Foo::Bar", "Foo#bar", "Foo.bar") to its definition locations.
     definitions: HashMap<String, Vec<LocationInfo>>,
 }
 

@@ -7,12 +7,15 @@ use crate::indexer::resolve_constant_path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
     Constant {
+        /// Constant name as written at the cursor (e.g. "Bar", "Foo::Bar").
         name: String,
+        /// Enclosing module/class nesting at the cursor (e.g. ["A", "B"] inside `module A; module B`).
         namespace: Vec<String>,
     },
     Method {
         name: String,
         receiver: MethodReceiver,
+        /// Enclosing module/class nesting at the cursor.
         namespace: Vec<String>,
     },
 }
@@ -39,7 +42,9 @@ pub fn resolve_reference(source: &[u8], offset: usize) -> Option<Reference> {
 }
 
 struct ReferenceFinder {
+    /// Byte offset of the cursor position to search for.
     offset: usize,
+    /// Current module/class nesting stack during AST traversal.
     namespace: Vec<String>,
     result: Option<Reference>,
 }
