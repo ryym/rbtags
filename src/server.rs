@@ -435,14 +435,6 @@ fn main_loop(
         .as_ref()
         .and_then(|folders| folders.first())
         .and_then(|folder| uri_to_path(&folder.uri))
-        .or_else(|| {
-            #[allow(deprecated)]
-            params.root_uri.as_ref().and_then(uri_to_path)
-        })
-        .or_else(|| {
-            #[allow(deprecated)]
-            params.root_path.as_ref().map(PathBuf::from)
-        })
         .or_else(|| std::env::current_dir().ok());
 
     log(format_args!("root_path: {root_path:?}"));
