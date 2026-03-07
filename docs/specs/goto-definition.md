@@ -100,3 +100,11 @@ When the above rules do not narrow down candidates, prioritize definitions close
 ### Fallback
 
 - [x] If none of the above yields any candidates, return all definitions matching the method name (ctags-equivalent behavior)
+
+## Custom Request: `rbtags/bestDefinition`
+
+A custom LSP request that accepts the same params as `textDocument/definition` but returns only the single best match.
+
+- [x] Accepts `GotoDefinitionParams` (same as `textDocument/definition`)
+- [x] Returns the top-priority `Location` or `null`
+- [x] Uses the same resolution and priority logic as `textDocument/definition`

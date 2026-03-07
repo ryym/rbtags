@@ -125,6 +125,25 @@ fn main_loop(
                         continue;
                     }
                 };
+                let req =
+                    match req.extract::<lsp_types::GotoDefinitionParams>("rbtags/bestDefinition") {
+                        Ok((id, params)) => {
+                            let result = handle_best_definition(&index, &params);
+                            let result = serde_json::to_value(&result)?;
+                            let resp = Response {
+                                id,
+                                result: Some(result),
+                                error: None,
+                            };
+                            connection.sender.send(Message::Response(resp))?;
+                            continue;
+                        }
+                        Err(ExtractError::MethodMismatch(req)) => req,
+                        Err(err @ ExtractError::JsonError { .. }) => {
+                            log(format_args!("error extracting request: {err:?}"));
+                            continue;
+                        }
+                    };
                 match cast::<WorkspaceSymbolRequest>(req) {
                     Ok((id, params)) => {
                         let result = handle_workspace_symbol(&index, &params);
@@ -194,14 +213,14 @@ fn handle_workspace_symbol(
     }
 }
 
-fn handle_goto_definition(
+fn resolve_definition_locations(
     index: &WorkspaceIndex,
     params: &lsp_types::GotoDefinitionParams,
-) -> Option<GotoDefinitionResponse> {
+) -> Vec<Location> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
     log(format_args!(
-        "gotoDefinition: uri={} line={} char={}",
+        "definition: uri={} line={} char={}",
         uri.as_str(),
         position.line,
         position.character
@@ -209,13 +228,15 @@ fn handle_goto_definition(
 
     let file_path = uri_to_path(uri);
     log(format_args!("  file_path: {file_path:?}"));
-    let file_path = file_path?;
+    let Some(file_path) = file_path else {
+        return Vec::new();
+    };
 
     let source = match fs::read(&file_path) {
         Ok(s) => s,
         Err(e) => {
             log(format_args!("  failed to read file: {e}"));
-            return None;
+            return Vec::new();
         }
     };
 
@@ -225,7 +246,9 @@ fn handle_goto_definition(
 
     let reference = resolver::resolve_reference(&source, offset);
     log(format_args!("  resolved reference: {reference:?}"));
-    let reference = reference?;
+    let Some(reference) = reference else {
+        return Vec::new();
+    };
 
     let raw_locations = match &reference {
         Reference::Constant { .. } => index.lookup_constant(&reference, &file_path),
@@ -247,11 +270,28 @@ fn handle_goto_definition(
         ));
     }
 
+    locations
+}
+
+fn handle_goto_definition(
+    index: &WorkspaceIndex,
+    params: &lsp_types::GotoDefinitionParams,
+) -> Option<GotoDefinitionResponse> {
+    let locations = resolve_definition_locations(index, params);
     if locations.is_empty() {
         None
     } else {
         Some(GotoDefinitionResponse::Array(locations))
     }
+}
+
+fn handle_best_definition(
+    index: &WorkspaceIndex,
+    params: &lsp_types::GotoDefinitionParams,
+) -> Option<Location> {
+    resolve_definition_locations(index, params)
+        .into_iter()
+        .next()
 }
 
 fn cast<R>(req: Request) -> Result<(RequestId, R::Params), ExtractError<Request>>

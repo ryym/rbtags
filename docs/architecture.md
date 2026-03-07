@@ -78,7 +78,8 @@ Prism provides only byte offsets (no line/column). LSP requires 0-based line and
 
 ## LSP capabilities
 
-| LSP Method                | Handler                   | Description                         |
-| ------------------------- | ------------------------- | ----------------------------------- |
-| `textDocument/definition` | `handle_goto_definition`  | Jump to constant definition         |
-| `workspace/symbol`        | `handle_workspace_symbol` | Search definitions by FQN substring |
+| LSP Method                | Handler                   | Description                             |
+| ------------------------- | ------------------------- | --------------------------------------- |
+| `textDocument/definition` | `handle_goto_definition`  | Jump to constant definition             |
+| `rbtags/bestDefinition`   | `handle_best_definition`  | Return only the top-priority definition |
+| `workspace/symbol`        | `handle_workspace_symbol` | Search definitions by FQN substring     |
