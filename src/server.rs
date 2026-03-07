@@ -251,12 +251,31 @@ fn resolve_definition_locations(
         return Vec::new();
     };
 
+    // Local variables are resolved directly (no workspace index lookup).
+    if let Reference::LocalVariable {
+        definition_offset, ..
+    } = &reference
+    {
+        let (line, col) = line_index.line_col(*definition_offset);
+        let uri = path_to_uri(&file_path);
+        let locations: Vec<_> = uri
+            .map(|uri| {
+                let pos = Position::new(line as u32, col as u32);
+                Location::new(uri, Range::new(pos, pos))
+            })
+            .into_iter()
+            .collect();
+        log(format_args!("  found {} location(s)", locations.len()));
+        return locations;
+    }
+
     let raw_locations = match &reference {
         Reference::Constant { .. } => index.lookup_constant(&reference, &file_path),
         Reference::Method { .. } => index.lookup_method(&reference, &file_path),
         Reference::InstanceVariable { .. } => {
             index.lookup_instance_variable(&reference, &file_path)
         }
+        Reference::LocalVariable { .. } => unreachable!(),
     };
 
     let locations: Vec<_> = raw_locations

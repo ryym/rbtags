@@ -130,6 +130,45 @@ Same approach as constants: walk outward from the current namespace.
 - Does not track inheritance (won't find `@var` defined in a superclass)
 - Only indexes assignments, not bare reads
 
+## Local Variable Jump
+
+Local variable definitions are resolved entirely within the current file at query time — they are not part of the workspace index.
+
+### Basic Behavior
+
+- [x] Detect local variable reads and writes at cursor position
+- [x] Jump to the first assignment (`x = val`) or parameter declaration in the enclosing scope
+- [x] When the cursor is on the first (defining) assignment itself, return no result (already at definition)
+
+### Parameters
+
+- [x] Method parameters (`def foo(x)`) are treated as definitions
+- [x] Optional parameters (`def foo(x = 1)`)
+- [x] Rest parameters (`def foo(*args)`)
+- [x] Block local variables (`arr.each { |item; local| }`)
+
+### Scope Awareness
+
+- [x] `def` creates a hard scope boundary — variables from other methods are not visible
+- [x] Blocks (`do..end`, `{ }`) create soft boundaries — outer variables are accessible
+- [x] Use ruby-prism's `depth` field to determine which scope a variable belongs to
+- [x] Lambda nodes create scope boundaries (same as blocks)
+
+```ruby
+def foo
+  x = 1
+  [1].each do
+    x  # depth=1 → resolves to x = 1 in the outer method scope
+  end
+end
+```
+
+### Limitations
+
+- Variables not previously assigned in the current scope are parsed as method calls by ruby-prism (correct Ruby semantics)
+- No cross-file resolution (local variables are file-scoped by definition)
+- Pattern matching variable bindings are not yet supported
+
 ## Custom Request: `rbtags/bestDefinition`
 
 A custom LSP request that accepts the same params as `textDocument/definition` but returns only the single best match.

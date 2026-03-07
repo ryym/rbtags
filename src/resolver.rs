@@ -24,6 +24,12 @@ pub enum Reference {
         /// Enclosing module/class nesting at the cursor.
         namespace: Vec<String>,
     },
+    LocalVariable {
+        /// Variable name (e.g. "x").
+        name: String,
+        /// Byte offset of the definition (first assignment or parameter declaration).
+        definition_offset: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,9 +48,26 @@ pub fn resolve_reference(source: &[u8], offset: usize) -> Option<Reference> {
         offset,
         namespace: Vec::new(),
         result: None,
+        pending_local_var: None,
     };
     finder.visit(&result.node());
+
+    // If the result is a pending local variable reference, do a second pass
+    // to find the definition location.
+    if let Some(PendingLocalVar { name, depth }) = finder.pending_local_var {
+        let def_offset = find_local_var_def(&result.node(), &name, offset, depth);
+        return def_offset.map(|definition_offset| Reference::LocalVariable {
+            name: String::from_utf8(name).unwrap(),
+            definition_offset,
+        });
+    }
+
     finder.result
+}
+
+struct PendingLocalVar {
+    name: Vec<u8>,
+    depth: u32,
 }
 
 struct ReferenceFinder {
@@ -53,11 +76,13 @@ struct ReferenceFinder {
     /// Current module/class nesting stack during AST traversal.
     namespace: Vec<String>,
     result: Option<Reference>,
+    /// Set when a local variable is detected; resolved in a second pass.
+    pending_local_var: Option<PendingLocalVar>,
 }
 
 impl ReferenceFinder {
     fn found(&self) -> bool {
-        self.result.is_some()
+        self.result.is_some() || self.pending_local_var.is_some()
     }
 }
 
@@ -166,6 +191,33 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
                 name: name.to_string(),
                 namespace: self.namespace.clone(),
             });
+            return;
+        }
+
+        // Local variable writes: x = val, x += val, x &&= val, x ||= val
+        let lvar = node
+            .as_local_variable_write_node()
+            .map(|n| (n.name(), n.depth(), n.name_loc()))
+            .or_else(|| {
+                node.as_local_variable_operator_write_node()
+                    .map(|n| (n.name(), n.depth(), n.name_loc()))
+            })
+            .or_else(|| {
+                node.as_local_variable_and_write_node()
+                    .map(|n| (n.name(), n.depth(), n.name_loc()))
+            })
+            .or_else(|| {
+                node.as_local_variable_or_write_node()
+                    .map(|n| (n.name(), n.depth(), n.name_loc()))
+            });
+        if let Some((name_id, depth, name_loc)) = lvar
+            && self.offset >= name_loc.start_offset()
+            && self.offset < name_loc.end_offset()
+        {
+            self.pending_local_var = Some(PendingLocalVar {
+                name: name_id.as_slice().to_vec(),
+                depth,
+            });
         }
     }
 
@@ -192,6 +244,164 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
                     namespace: self.namespace.clone(),
                 });
             }
+        } else if let Some(n) = node.as_local_variable_read_node() {
+            let loc = n.location();
+            if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+                self.pending_local_var = Some(PendingLocalVar {
+                    name: n.name().as_slice().to_vec(),
+                    depth: n.depth(),
+                });
+            }
+        }
+    }
+}
+
+/// Find the definition (first assignment or parameter) of a local variable.
+///
+/// `name` is the variable name, `cursor_offset` is where the reference was found,
+/// and `depth` is from ruby-prism's LocalVariableReadNode (0 = current scope, 1 = parent, etc.).
+fn find_local_var_def(
+    root: &Node<'_>,
+    name: &[u8],
+    cursor_offset: usize,
+    depth: u32,
+) -> Option<usize> {
+    let mut finder = LocalVarDefFinder {
+        name,
+        cursor_offset,
+        target_depth: depth,
+        scope_depth: 0,
+        cursor_scope_depth: None,
+        candidates: Vec::new(),
+    };
+    finder.visit(root);
+
+    // After traversal, cursor_scope_depth is finalized.
+    let target_scope = finder
+        .cursor_scope_depth?
+        .checked_sub(finder.target_depth)?;
+
+    // Return the first (earliest) candidate in the target scope, before the cursor.
+    finder
+        .candidates
+        .iter()
+        .filter(|(offset, scope)| *scope == target_scope && *offset < cursor_offset)
+        .map(|(offset, _)| *offset)
+        .next()
+}
+
+struct LocalVarDefFinder<'a> {
+    name: &'a [u8],
+    cursor_offset: usize,
+    target_depth: u32,
+    /// Incremented when entering a scope boundary (def/block/lambda).
+    scope_depth: u32,
+    /// The scope_depth at the cursor position (innermost scope), finalized after traversal.
+    cursor_scope_depth: Option<u32>,
+    /// All candidate definitions: (byte_offset, scope_depth).
+    candidates: Vec<(usize, u32)>,
+}
+
+impl LocalVarDefFinder<'_> {
+    fn record_candidate(&mut self, offset: usize) {
+        self.candidates.push((offset, self.scope_depth));
+    }
+}
+
+impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
+    fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
+        let loc = node.location();
+        let contains_cursor =
+            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+
+        self.scope_depth += 1;
+        if contains_cursor {
+            self.cursor_scope_depth = Some(self.scope_depth);
+        }
+        ruby_prism::visit_def_node(self, node);
+        self.scope_depth -= 1;
+    }
+
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
+        let loc = node.location();
+        let contains_cursor =
+            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+
+        self.scope_depth += 1;
+        if contains_cursor {
+            self.cursor_scope_depth = Some(self.scope_depth);
+        }
+        ruby_prism::visit_block_node(self, node);
+        self.scope_depth -= 1;
+    }
+
+    fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
+        let loc = node.location();
+        let contains_cursor =
+            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+
+        self.scope_depth += 1;
+        if contains_cursor {
+            self.cursor_scope_depth = Some(self.scope_depth);
+        }
+        ruby_prism::visit_lambda_node(self, node);
+        self.scope_depth -= 1;
+    }
+
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        // Local variable writes with depth=0 are definitions in their own scope
+        let lvar_write = node
+            .as_local_variable_write_node()
+            .filter(|n| n.depth() == 0)
+            .map(|n| (n.name(), n.name_loc()))
+            .or_else(|| {
+                node.as_local_variable_target_node()
+                    .filter(|n| n.depth() == 0)
+                    .map(|n| (n.name(), n.location()))
+            })
+            .or_else(|| {
+                node.as_local_variable_operator_write_node()
+                    .filter(|n| n.depth() == 0)
+                    .map(|n| (n.name(), n.name_loc()))
+            })
+            .or_else(|| {
+                node.as_local_variable_and_write_node()
+                    .filter(|n| n.depth() == 0)
+                    .map(|n| (n.name(), n.name_loc()))
+            })
+            .or_else(|| {
+                node.as_local_variable_or_write_node()
+                    .filter(|n| n.depth() == 0)
+                    .map(|n| (n.name(), n.name_loc()))
+            });
+
+        if let Some((name_id, loc)) = lvar_write
+            && name_id.as_slice() == self.name
+        {
+            self.record_candidate(loc.start_offset());
+        }
+    }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
+        // Parameters are leaf nodes and serve as definitions
+        if let Some(n) = node.as_required_parameter_node() {
+            if n.name().as_slice() == self.name {
+                self.record_candidate(n.location().start_offset());
+            }
+        } else if let Some(n) = node.as_optional_parameter_node() {
+            if n.name().as_slice() == self.name {
+                self.record_candidate(n.location().start_offset());
+            }
+        } else if let Some(n) = node.as_rest_parameter_node() {
+            if let Some(name) = n.name()
+                && name.as_slice() == self.name
+            {
+                self.record_candidate(n.location().start_offset());
+            }
+        } else if let Some(n) = node.as_block_local_variable_node()
+            && n.name().as_slice() == self.name
+        {
+            self.record_candidate(n.location().start_offset());
         }
     }
 }
@@ -524,5 +734,97 @@ mod tests {
     fn instance_variable_or_write() {
         let src = b"class Foo\n  def bar\n    @cache ||= 1\n  end\nend";
         assert_eq!(resolve(src, 24), ivar("cache", &["Foo"]));
+    }
+
+    // --- Local variable tests ---
+
+    fn lvar(name: &str, def_offset: usize) -> Option<Reference> {
+        Some(Reference::LocalVariable {
+            name: name.to_string(),
+            definition_offset: def_offset,
+        })
+    }
+
+    #[test]
+    fn local_variable_read_jumps_to_assignment() {
+        let src = b"def foo\n  x = 1\n  x\nend";
+        let cursor = find_offset(src, 2, b"x"); // second "x" (the read)
+        assert_eq!(resolve(src, cursor), lvar("x", find_offset(src, 1, b"x")));
+    }
+
+    #[test]
+    fn local_variable_first_assignment_returns_none() {
+        let src = b"def foo\n  x = 1\nend";
+        let cursor = find_offset(src, 1, b"x");
+        assert_eq!(resolve(src, cursor), None);
+    }
+
+    #[test]
+    fn local_variable_second_assignment_jumps_to_first() {
+        let src = b"def foo\n  x = 1\n  x = 2\nend";
+        let first = find_offset(src, 1, b"x");
+        let second = find_offset(src, 2, b"x");
+        assert_eq!(resolve(src, second), lvar("x", first));
+    }
+
+    #[test]
+    fn local_variable_method_parameter() {
+        let src = b"def foo(x)\n  x\nend";
+        let param = find_offset(src, 1, b"x");
+        let read = find_offset(src, 2, b"x");
+        assert_eq!(resolve(src, read), lvar("x", param));
+    }
+
+    #[test]
+    fn local_variable_scoped_to_method() {
+        // In bar, x has never been assigned, so Ruby/Prism treats it as a method call
+        let src = b"def foo\n  x = 1\nend\ndef bar\n  x\nend";
+        let read_in_bar = find_offset(src, 2, b"x");
+        assert_eq!(
+            resolve(src, read_in_bar),
+            method("x", MethodReceiver::None, &[])
+        );
+    }
+
+    #[test]
+    fn local_variable_block_parameter() {
+        let src = b"[1].each do |item|\n  item\nend";
+        let param = find_offset(src, 1, b"item");
+        let read = find_offset(src, 2, b"item");
+        assert_eq!(resolve(src, read), lvar("item", param));
+    }
+
+    #[test]
+    fn local_variable_in_block_from_outer_scope() {
+        let src = b"def foo\n  x = 1\n  [1].each do\n    x\n  end\nend";
+        let def = find_offset(src, 1, b"x");
+        let read = find_offset(src, 2, b"x");
+        assert_eq!(resolve(src, read), lvar("x", def));
+    }
+
+    /// Find the byte offset of the nth occurrence of `needle` in `src` (1-indexed).
+    fn find_offset(src: &[u8], nth: usize, needle: &[u8]) -> usize {
+        let mut count = 0;
+        for i in 0..src.len() {
+            if src[i..].starts_with(needle) {
+                // Ensure it's a word boundary (not part of a longer identifier)
+                let before_ok = i == 0 || !src[i - 1].is_ascii_alphanumeric() && src[i - 1] != b'_';
+                let end = i + needle.len();
+                let after_ok =
+                    end >= src.len() || !src[end].is_ascii_alphanumeric() && src[end] != b'_';
+                if before_ok && after_ok {
+                    count += 1;
+                    if count == nth {
+                        return i;
+                    }
+                }
+            }
+        }
+        panic!(
+            "could not find occurrence {} of {:?} in {:?}",
+            nth,
+            std::str::from_utf8(needle).unwrap(),
+            std::str::from_utf8(src).unwrap()
+        );
     }
 }
