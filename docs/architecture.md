@@ -75,11 +75,3 @@ Like ctags, rbtags relies purely on static source analysis. There is no runtime 
 ### Byte offset as the common currency
 
 Prism provides only byte offsets (no line/column). LSP requires 0-based line and character. `location::LineIndex` bridges this gap by pre-computing a line start offset table and using binary search for conversion.
-
-## LSP capabilities
-
-| LSP Method                | Handler                   | Description                             |
-| ------------------------- | ------------------------- | --------------------------------------- |
-| `textDocument/definition` | `handle_goto_definition`  | Jump to constant definition             |
-| `rbtags/bestDefinition`   | `handle_best_definition`  | Return only the top-priority definition |
-| `workspace/symbol`        | `handle_workspace_symbol` | Search definitions by FQN substring     |
