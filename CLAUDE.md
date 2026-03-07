@@ -6,8 +6,8 @@ See [docs/goal.md](docs/goal.md) for motivation.
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — Module structure, two-phase design, key design decisions
-- [docs/ruby-prism-usage.md](docs/ruby-prism-usage.md) — ruby-prism crate API reference
-- [docs/lsp-server-usage.md](docs/lsp-server-usage.md) — lsp-server crate usage patterns
+- [docs/dev/ruby-prism-usage.md](docs/ruby-prism-usage.md) — ruby-prism crate API reference
+- [docs/dev/lsp-server-usage.md](docs/lsp-server-usage.md) — lsp-server crate usage patterns
 
 ## Commands
 
