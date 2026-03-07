@@ -4,6 +4,10 @@ use ruby_prism::{
 
 use crate::indexer::resolve_constant_path;
 
+fn loc_contains(loc: &ruby_prism::Location<'_>, offset: usize) -> bool {
+    offset >= loc.start_offset() && offset < loc.end_offset()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reference {
     Constant {
@@ -121,7 +125,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             return;
         }
         let loc = node.location();
-        if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+        if loc_contains(&loc, self.offset) {
             let node = node.as_node();
             let parts = resolve_constant_path(&node);
             if !parts.is_empty() {
@@ -142,8 +146,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
 
         // Check if cursor is on the method name
         if let Some(msg_loc) = node.message_loc()
-            && self.offset >= msg_loc.start_offset()
-            && self.offset < msg_loc.end_offset()
+            && loc_contains(&msg_loc, self.offset)
         {
             let name = std::str::from_utf8(node.name().as_slice())
                 .unwrap()
@@ -182,8 +185,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
                     .map(|n| (n.name(), n.location()))
             });
         if let Some((name_id, loc)) = ivar
-            && self.offset >= loc.start_offset()
-            && self.offset < loc.end_offset()
+            && loc_contains(&loc, self.offset)
         {
             let name = std::str::from_utf8(name_id.as_slice()).unwrap();
             let name = name.strip_prefix('@').unwrap_or(name);
@@ -211,8 +213,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
                     .map(|n| (n.name(), n.depth(), n.name_loc()))
             });
         if let Some((name_id, depth, name_loc)) = lvar
-            && self.offset >= name_loc.start_offset()
-            && self.offset < name_loc.end_offset()
+            && loc_contains(&name_loc, self.offset)
         {
             self.pending_local_var = Some(PendingLocalVar {
                 name: name_id.as_slice().to_vec(),
@@ -227,7 +228,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
         }
         if let Some(n) = node.as_constant_read_node() {
             let loc = n.location();
-            if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+            if loc_contains(&loc, self.offset) {
                 let name = std::str::from_utf8(n.name().as_slice()).unwrap();
                 self.result = Some(Reference::Constant {
                     name: name.to_string(),
@@ -236,7 +237,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             }
         } else if let Some(n) = node.as_instance_variable_read_node() {
             let loc = n.location();
-            if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+            if loc_contains(&loc, self.offset) {
                 let name = std::str::from_utf8(n.name().as_slice()).unwrap();
                 let name = name.strip_prefix('@').unwrap_or(name);
                 self.result = Some(Reference::InstanceVariable {
@@ -246,7 +247,7 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             }
         } else if let Some(n) = node.as_local_variable_read_node() {
             let loc = n.location();
-            if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+            if loc_contains(&loc, self.offset) {
                 self.pending_local_var = Some(PendingLocalVar {
                     name: n.name().as_slice().to_vec(),
                     depth: n.depth(),
@@ -311,8 +312,7 @@ impl LocalVarDefFinder<'_> {
 impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
         let loc = node.location();
-        let contains_cursor =
-            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+        let contains_cursor = loc_contains(&loc, self.cursor_offset);
 
         self.scope_depth += 1;
         if contains_cursor {
@@ -324,8 +324,7 @@ impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
 
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
         let loc = node.location();
-        let contains_cursor =
-            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+        let contains_cursor = loc_contains(&loc, self.cursor_offset);
 
         self.scope_depth += 1;
         if contains_cursor {
@@ -337,8 +336,7 @@ impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
 
     fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
         let loc = node.location();
-        let contains_cursor =
-            self.cursor_offset >= loc.start_offset() && self.cursor_offset < loc.end_offset();
+        let contains_cursor = loc_contains(&loc, self.cursor_offset);
 
         self.scope_depth += 1;
         if contains_cursor {
