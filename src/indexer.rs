@@ -1,4 +1,4 @@
-use ruby_prism::Node;
+use ruby_prism::{Node, Visit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DefinitionKind {
@@ -6,6 +6,7 @@ pub enum DefinitionKind {
     Class,
     Method,
     Constant,
+    InstanceVariable,
 }
 
 #[derive(Debug)]
@@ -102,6 +103,56 @@ fn visit(node: &Node<'_>, namespace: &[String], in_singleton: bool, defs: &mut V
             kind: DefinitionKind::Method,
             offset: n.location().start_offset(),
         });
+        if let Some(body) = n.body() {
+            collect_ivar_defs(&body, namespace, defs);
+        }
+    }
+}
+
+/// Walk a method body using the Visit trait to find instance variable assignments.
+fn collect_ivar_defs(node: &Node<'_>, namespace: &[String], defs: &mut Vec<Definition>) {
+    let owner = namespace.join("::");
+    let mut collector = IvarCollector {
+        owner,
+        defs: Vec::new(),
+    };
+    collector.visit(node);
+    defs.append(&mut collector.defs);
+}
+
+struct IvarCollector {
+    owner: String,
+    defs: Vec<Definition>,
+}
+
+impl IvarCollector {
+    fn record(&mut self, name_bytes: &[u8], offset: usize) {
+        let name = std::str::from_utf8(name_bytes).unwrap();
+        let name = name.strip_prefix('@').unwrap_or(name);
+        let fqn = if self.owner.is_empty() {
+            format!("#@{name}")
+        } else {
+            format!("{}#@{name}", self.owner)
+        };
+        self.defs.push(Definition {
+            fqn,
+            kind: DefinitionKind::InstanceVariable,
+            offset,
+        });
+    }
+}
+
+impl<'pr> Visit<'pr> for IvarCollector {
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        if let Some(n) = node.as_instance_variable_write_node() {
+            self.record(n.name().as_slice(), n.location().start_offset());
+        } else if let Some(n) = node.as_instance_variable_operator_write_node() {
+            self.record(n.name().as_slice(), n.location().start_offset());
+        } else if let Some(n) = node.as_instance_variable_and_write_node() {
+            self.record(n.name().as_slice(), n.location().start_offset());
+        } else if let Some(n) = node.as_instance_variable_or_write_node() {
+            self.record(n.name().as_slice(), n.location().start_offset());
+        }
     }
 }
 
@@ -222,5 +273,73 @@ mod tests {
         let defs = index_source(src);
         assert!(defs.iter().any(|d| d.fqn == "Foo#a"));
         assert!(defs.iter().any(|d| d.fqn == "Foo#b"));
+    }
+
+    #[test]
+    fn instance_variable_in_method() {
+        let src = b"class User\n  def initialize(name)\n    @name = name\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        assert_eq!(ivars.len(), 1);
+        assert_eq!(ivars[0].fqn, "User#@name");
+    }
+
+    #[test]
+    fn instance_variable_multiple_methods() {
+        let src = b"class Foo\n  def a\n    @x = 1\n  end\n  def b\n    @y = 2\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        let fqns: Vec<&str> = ivars.iter().map(|d| d.fqn.as_str()).collect();
+        assert!(fqns.contains(&"Foo#@x"));
+        assert!(fqns.contains(&"Foo#@y"));
+    }
+
+    #[test]
+    fn instance_variable_operator_write() {
+        let src = b"class Foo\n  def bar\n    @count += 1\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        assert_eq!(ivars.len(), 1);
+        assert_eq!(ivars[0].fqn, "Foo#@count");
+    }
+
+    #[test]
+    fn instance_variable_or_write() {
+        let src = b"class Foo\n  def bar\n    @cache ||= compute\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        assert_eq!(ivars.len(), 1);
+        assert_eq!(ivars[0].fqn, "Foo#@cache");
+    }
+
+    #[test]
+    fn instance_variable_in_nested_class() {
+        let src = b"module A\n  class B\n    def foo\n      @val = 1\n    end\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        assert_eq!(ivars.len(), 1);
+        assert_eq!(ivars[0].fqn, "A::B#@val");
+    }
+
+    #[test]
+    fn instance_variable_duplicate_across_methods() {
+        let src = b"class Foo\n  def a\n    @x = 1\n  end\n  def b\n    @x = 2\n  end\nend";
+        let ivars: Vec<_> = index_source(src)
+            .into_iter()
+            .filter(|d| d.kind == DefinitionKind::InstanceVariable)
+            .collect();
+        // Both assignments are indexed (same FQN, different offsets)
+        assert_eq!(ivars.len(), 2);
+        assert!(ivars.iter().all(|d| d.fqn == "Foo#@x"));
     }
 }

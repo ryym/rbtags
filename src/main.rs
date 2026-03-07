@@ -63,6 +63,7 @@ fn run_dump(path: &Path) {
                 DefinitionKind::Class => "class",
                 DefinitionKind::Method => "method",
                 DefinitionKind::Constant => "constant",
+                DefinitionKind::InstanceVariable => "ivar",
             };
             println!(
                 "{}\t{}\t{}:{}",

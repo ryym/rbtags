@@ -43,6 +43,7 @@ fn def_kind_to_symbol_kind(kind: &indexer::DefinitionKind) -> SymbolKind {
         indexer::DefinitionKind::Class => SymbolKind::CLASS,
         indexer::DefinitionKind::Method => SymbolKind::METHOD,
         indexer::DefinitionKind::Constant => SymbolKind::CONSTANT,
+        indexer::DefinitionKind::InstanceVariable => SymbolKind::FIELD,
     }
 }
 
@@ -253,6 +254,9 @@ fn resolve_definition_locations(
     let raw_locations = match &reference {
         Reference::Constant { .. } => index.lookup_constant(&reference, &file_path),
         Reference::Method { .. } => index.lookup_method(&reference, &file_path),
+        Reference::InstanceVariable { .. } => {
+            index.lookup_instance_variable(&reference, &file_path)
+        }
     };
 
     let locations: Vec<_> = raw_locations

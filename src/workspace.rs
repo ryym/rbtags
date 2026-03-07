@@ -238,6 +238,55 @@ impl WorkspaceIndex {
         candidates.into_iter().map(|(loc, _)| loc).collect()
     }
 
+    pub fn lookup_instance_variable(
+        &self,
+        reference: &Reference,
+        cursor_file: &Path,
+    ) -> Vec<&LocationInfo> {
+        let Reference::InstanceVariable { name, namespace } = reference else {
+            return Vec::new();
+        };
+
+        let ivar_suffix = format!("#@{name}");
+
+        // Tier 1: Nesting-aware resolution.
+        // For @name with namespace=["A","B"], try "A::B#@name", "A#@name", "#@name".
+        let mut candidates: Vec<(&LocationInfo, usize)> = Vec::new();
+        for (i, depth) in (0..=namespace.len()).rev().enumerate() {
+            let prefix = &namespace[..depth];
+            let candidate_fqn = if prefix.is_empty() {
+                format!("#@{name}")
+            } else {
+                format!("{}{ivar_suffix}", prefix.join("::"))
+            };
+            if let Some(locations) = self.definitions.get(&candidate_fqn) {
+                for loc in locations {
+                    candidates.push((loc, i));
+                }
+            }
+        }
+
+        if !candidates.is_empty() {
+            candidates.sort_by_key(|(loc, nesting_rank)| {
+                (*nesting_rank, file_distance(&loc.path, cursor_file))
+            });
+            return candidates.into_iter().map(|(loc, _)| loc).collect();
+        }
+
+        // Tier 2: Suffix match fallback — any FQN ending with #@{name}.
+        let mut fallback: Vec<(&LocationInfo, u32)> = Vec::new();
+        for (fqn, locations) in &self.definitions {
+            if fqn.ends_with(&ivar_suffix) {
+                for loc in locations {
+                    fallback.push((loc, file_distance(&loc.path, cursor_file)));
+                }
+            }
+        }
+
+        fallback.sort_by_key(|(_, dist)| *dist);
+        fallback.into_iter().map(|(loc, _)| loc).collect()
+    }
+
     pub fn search(&self, query: &str) -> Vec<(&str, &LocationInfo)> {
         let mut results = Vec::new();
         for (fqn, locations) in &self.definitions {
@@ -833,6 +882,80 @@ mod tests {
             candidates,
             vec!["A::B::Foo::Bar", "A::Foo::Bar", "Foo::Bar"]
         );
+    }
+
+    // --- Instance variable lookup tests ---
+
+    fn lookup_ivar_fqns(
+        index: &WorkspaceIndex,
+        name: &str,
+        namespace: &[&str],
+        cursor_file: &Path,
+    ) -> Vec<(PathBuf, String)> {
+        let reference = Reference::InstanceVariable {
+            name: name.to_string(),
+            namespace: namespace.iter().map(|s| s.to_string()).collect(),
+        };
+        let results = index.lookup_instance_variable(&reference, cursor_file);
+
+        // Recover FQNs for assertions
+        let ivar_suffix = format!("#@{name}");
+        results
+            .into_iter()
+            .filter_map(|loc| {
+                index
+                    .definitions
+                    .iter()
+                    .find(|(fqn, locs)| {
+                        fqn.ends_with(&ivar_suffix) && locs.iter().any(|l| std::ptr::eq(l, loc))
+                    })
+                    .map(|(fqn, _)| (loc.path.clone(), fqn.clone()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ivar_lookup_same_class() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class User\n  def initialize\n    @name = ''\n  end\nend\n",
+        );
+
+        let results = lookup_ivar_fqns(&index, "name", &["User"], Path::new("a.rb"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "User#@name");
+    }
+
+    #[test]
+    fn ivar_lookup_nesting_resolution() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class Foo\n  def a\n    @x = 1\n  end\nend\n",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"class Bar\n  def a\n    @x = 2\n  end\nend\n",
+        );
+
+        // @x inside Foo → prefers Foo#@x
+        let results = lookup_ivar_fqns(&index, "x", &["Foo"], Path::new("c.rb"));
+        assert_eq!(results[0].1, "Foo#@x");
+    }
+
+    #[test]
+    fn ivar_lookup_suffix_fallback() {
+        let mut index = WorkspaceIndex::new();
+        index.index_file(
+            Path::new("a.rb"),
+            b"class Foo\n  def a\n    @x = 1\n  end\nend\n",
+        );
+
+        // @x inside Unknown → no nesting match → suffix fallback
+        let results = lookup_ivar_fqns(&index, "x", &["Unknown"], Path::new("c.rb"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, "Foo#@x");
     }
 
     // --- Utility tests ---

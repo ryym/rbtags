@@ -12,6 +12,11 @@ Status legend:
 - [x] Parse and index files in parallel using a thread pool (number of threads = logical CPU cores)
 - [x] Log total build time for diagnostics
 
+## Instance Variables
+
+- [x] Index instance variable write nodes (`@x = val`, `@x += val`, `@x ||= val`, `@x &&= val`) inside method bodies
+- [x] Associate instance variables with the enclosing class/module namespace (e.g., `User#@name`)
+
 ## Exclude Paths
 
 Allow users to specify directories to exclude from indexing via a configuration file (separate from `.gitignore`).

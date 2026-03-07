@@ -18,6 +18,12 @@ pub enum Reference {
         /// Enclosing module/class nesting at the cursor.
         namespace: Vec<String>,
     },
+    InstanceVariable {
+        /// Variable name without `@` prefix (e.g. "name" for `@name`).
+        name: String,
+        /// Enclosing module/class nesting at the cursor.
+        namespace: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +136,39 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
         ruby_prism::visit_call_node(self, node);
     }
 
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        if self.found() {
+            return;
+        }
+        // Instance variable writes: @x = val, @x += val, @x &&= val, @x ||= val
+        let ivar = node
+            .as_instance_variable_write_node()
+            .map(|n| (n.name(), n.location()))
+            .or_else(|| {
+                node.as_instance_variable_operator_write_node()
+                    .map(|n| (n.name(), n.location()))
+            })
+            .or_else(|| {
+                node.as_instance_variable_and_write_node()
+                    .map(|n| (n.name(), n.location()))
+            })
+            .or_else(|| {
+                node.as_instance_variable_or_write_node()
+                    .map(|n| (n.name(), n.location()))
+            });
+        if let Some((name_id, loc)) = ivar
+            && self.offset >= loc.start_offset()
+            && self.offset < loc.end_offset()
+        {
+            let name = std::str::from_utf8(name_id.as_slice()).unwrap();
+            let name = name.strip_prefix('@').unwrap_or(name);
+            self.result = Some(Reference::InstanceVariable {
+                name: name.to_string(),
+                namespace: self.namespace.clone(),
+            });
+        }
+    }
+
     fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
         if self.found() {
             return;
@@ -139,6 +178,16 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
                 let name = std::str::from_utf8(n.name().as_slice()).unwrap();
                 self.result = Some(Reference::Constant {
+                    name: name.to_string(),
+                    namespace: self.namespace.clone(),
+                });
+            }
+        } else if let Some(n) = node.as_instance_variable_read_node() {
+            let loc = n.location();
+            if self.offset >= loc.start_offset() && self.offset < loc.end_offset() {
+                let name = std::str::from_utf8(n.name().as_slice()).unwrap();
+                let name = name.strip_prefix('@').unwrap_or(name);
+                self.result = Some(Reference::InstanceVariable {
                     name: name.to_string(),
                     namespace: self.namespace.clone(),
                 });
@@ -437,5 +486,43 @@ mod tests {
             resolve(src, 4),
             method("bar", MethodReceiver::Variable("foo".to_string()), &[])
         );
+    }
+
+    // --- Instance variable tests ---
+
+    fn ivar(name: &str, ns: &[&str]) -> Option<Reference> {
+        Some(Reference::InstanceVariable {
+            name: name.to_string(),
+            namespace: ns.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    #[test]
+    fn instance_variable_read() {
+        // "class Foo\n  def bar\n    @name\n  end\nend"
+        //  0         1         2
+        //  0123456789012345678901234567
+        let src = b"class Foo\n  def bar\n    @name\n  end\nend";
+        assert_eq!(resolve(src, 24), ivar("name", &["Foo"]));
+    }
+
+    #[test]
+    fn instance_variable_write() {
+        // "class Foo\n  def bar\n    @name = 1\n  end\nend"
+        let src = b"class Foo\n  def bar\n    @name = 1\n  end\nend";
+        assert_eq!(resolve(src, 24), ivar("name", &["Foo"]));
+    }
+
+    #[test]
+    fn instance_variable_in_nested_module() {
+        let src = b"module A\n  class B\n    def foo\n      @val\n    end\n  end\nend";
+        // @val starts at offset 37
+        assert_eq!(resolve(src, 37), ivar("val", &["A", "B"]));
+    }
+
+    #[test]
+    fn instance_variable_or_write() {
+        let src = b"class Foo\n  def bar\n    @cache ||= 1\n  end\nend";
+        assert_eq!(resolve(src, 24), ivar("cache", &["Foo"]));
     }
 }

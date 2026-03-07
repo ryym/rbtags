@@ -101,6 +101,35 @@ When the above rules do not narrow down candidates, prioritize definitions close
 
 - [x] If none of the above yields any candidates, return all definitions matching the method name (ctags-equivalent behavior)
 
+## Instance Variable Jump
+
+### Indexing
+
+- [x] Index instance variable assignments (`@name = value`) inside method bodies with owning class FQN (e.g., `User#@name`)
+- [x] Index operator assignments (`@count += 1`), or-assignments (`@cache ||= val`), and-assignments (`@flag &&= val`)
+- [x] Each assignment is indexed separately (same `@var` in multiple methods produces multiple index entries)
+
+### Basic Behavior
+
+- [x] Detect `@var` at cursor (both reads and writes) and resolve to the owning class's instance variable definitions
+- [x] Use nesting-aware resolution: `@name` inside `User` → try `User#@name` first, then walk outward
+
+### Nesting-Aware Resolution
+
+Same approach as constants: walk outward from the current namespace.
+
+- [x] `@name` inside `A::B` tries `A::B#@name` → `A#@name` → `#@name`
+
+### Suffix Match Fallback
+
+- [x] When nesting resolution finds no match, fall back to any FQN ending with `#@{name}`
+- [x] Sort fallback candidates by file distance
+
+### Limitations
+
+- Does not track inheritance (won't find `@var` defined in a superclass)
+- Only indexes assignments, not bare reads
+
 ## Custom Request: `rbtags/bestDefinition`
 
 A custom LSP request that accepts the same params as `textDocument/definition` but returns only the single best match.
