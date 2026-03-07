@@ -270,23 +270,23 @@ fn find_local_var_def(
     let mut finder = LocalVarDefFinder {
         name,
         cursor_offset,
-        target_depth: depth,
-        scope_depth: 0,
-        cursor_scope_depth: None,
+        next_scope_id: 0,
+        scope_stack: Vec::new(),
+        cursor_scope_stack: None,
         candidates: Vec::new(),
     };
     finder.visit(root);
 
-    // After traversal, cursor_scope_depth is finalized.
-    let target_scope = finder
-        .cursor_scope_depth?
-        .checked_sub(finder.target_depth)?;
+    // After traversal, cursor_scope_stack is finalized.
+    let cursor_stack = finder.cursor_scope_stack?;
+    let target_idx = cursor_stack.len().checked_sub(1 + depth as usize)?;
+    let target_scope_id = cursor_stack[target_idx];
 
     // Return the first (earliest) candidate in the target scope, before the cursor.
     finder
         .candidates
         .iter()
-        .filter(|(offset, scope)| *scope == target_scope && *offset < cursor_offset)
+        .filter(|(offset, scope_id)| *scope_id == target_scope_id && *offset < cursor_offset)
         .map(|(offset, _)| *offset)
         .next()
 }
@@ -294,56 +294,59 @@ fn find_local_var_def(
 struct LocalVarDefFinder<'a> {
     name: &'a [u8],
     cursor_offset: usize,
-    target_depth: u32,
-    /// Incremented when entering a scope boundary (def/block/lambda).
-    scope_depth: u32,
-    /// The scope_depth at the cursor position (innermost scope), finalized after traversal.
-    cursor_scope_depth: Option<u32>,
-    /// All candidate definitions: (byte_offset, scope_depth).
+    /// Counter for assigning unique scope IDs.
+    next_scope_id: u32,
+    /// Stack of scope IDs during traversal.
+    scope_stack: Vec<u32>,
+    /// Snapshot of the scope stack at the cursor position, finalized after traversal.
+    cursor_scope_stack: Option<Vec<u32>>,
+    /// All candidate definitions: (byte_offset, scope_id).
     candidates: Vec<(usize, u32)>,
 }
 
 impl LocalVarDefFinder<'_> {
+    fn enter_scope(&mut self, contains_cursor: bool) {
+        let id = self.next_scope_id;
+        self.next_scope_id += 1;
+        self.scope_stack.push(id);
+        if contains_cursor {
+            self.cursor_scope_stack = Some(self.scope_stack.clone());
+        }
+    }
+
+    fn leave_scope(&mut self) {
+        self.scope_stack.pop();
+    }
+
+    fn current_scope_id(&self) -> u32 {
+        *self.scope_stack.last().unwrap_or(&u32::MAX)
+    }
+
     fn record_candidate(&mut self, offset: usize) {
-        self.candidates.push((offset, self.scope_depth));
+        self.candidates.push((offset, self.current_scope_id()));
     }
 }
 
 impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
         let loc = node.location();
-        let contains_cursor = loc_contains(&loc, self.cursor_offset);
-
-        self.scope_depth += 1;
-        if contains_cursor {
-            self.cursor_scope_depth = Some(self.scope_depth);
-        }
+        self.enter_scope(loc_contains(&loc, self.cursor_offset));
         ruby_prism::visit_def_node(self, node);
-        self.scope_depth -= 1;
+        self.leave_scope();
     }
 
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
         let loc = node.location();
-        let contains_cursor = loc_contains(&loc, self.cursor_offset);
-
-        self.scope_depth += 1;
-        if contains_cursor {
-            self.cursor_scope_depth = Some(self.scope_depth);
-        }
+        self.enter_scope(loc_contains(&loc, self.cursor_offset));
         ruby_prism::visit_block_node(self, node);
-        self.scope_depth -= 1;
+        self.leave_scope();
     }
 
     fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
         let loc = node.location();
-        let contains_cursor = loc_contains(&loc, self.cursor_offset);
-
-        self.scope_depth += 1;
-        if contains_cursor {
-            self.cursor_scope_depth = Some(self.scope_depth);
-        }
+        self.enter_scope(loc_contains(&loc, self.cursor_offset));
         ruby_prism::visit_lambda_node(self, node);
-        self.scope_depth -= 1;
+        self.leave_scope();
     }
 
     fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
@@ -790,6 +793,15 @@ mod tests {
         let param = find_offset(src, 1, b"item");
         let read = find_offset(src, 2, b"item");
         assert_eq!(resolve(src, read), lvar("item", param));
+    }
+
+    #[test]
+    fn local_variable_same_name_different_methods() {
+        // Each method has its own scope — x in method2 should not jump to method1's x
+        let src = b"class Foo\n  def method1\n    a = 1\n    puts(a)\n  end\n\n  def method2\n    a = 2\n    puts(a)\n  end\nend";
+        let def_in_method2 = find_offset(src, 3, b"a"); // 3rd "a" = a = 2
+        let read_in_method2 = find_offset(src, 4, b"a"); // 4th "a" = puts(a) in method2
+        assert_eq!(resolve(src, read_in_method2), lvar("a", def_in_method2));
     }
 
     #[test]
