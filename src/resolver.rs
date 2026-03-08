@@ -169,20 +169,21 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
             return;
         }
         // Instance variable writes: @x = val, @x += val, @x &&= val, @x ||= val
+        // Use name_loc() to only match when cursor is on the variable name, not the RHS.
         let ivar = node
             .as_instance_variable_write_node()
-            .map(|n| (n.name(), n.location()))
+            .map(|n| (n.name(), n.name_loc()))
             .or_else(|| {
                 node.as_instance_variable_operator_write_node()
-                    .map(|n| (n.name(), n.location()))
+                    .map(|n| (n.name(), n.name_loc()))
             })
             .or_else(|| {
                 node.as_instance_variable_and_write_node()
-                    .map(|n| (n.name(), n.location()))
+                    .map(|n| (n.name(), n.name_loc()))
             })
             .or_else(|| {
                 node.as_instance_variable_or_write_node()
-                    .map(|n| (n.name(), n.location()))
+                    .map(|n| (n.name(), n.name_loc()))
             });
         if let Some((name_id, loc)) = ivar
             && loc_contains(&loc, self.offset)
@@ -735,6 +736,15 @@ mod tests {
     fn instance_variable_or_write() {
         let src = b"class Foo\n  def bar\n    @cache ||= 1\n  end\nend";
         assert_eq!(resolve(src, 24), ivar("cache", &["Foo"]));
+    }
+
+    #[test]
+    fn instance_variable_write_rhs_not_captured() {
+        // Cursor on RHS of @c = expr should not resolve to @c
+        let src = b"class Foo\n  def bar(a)\n    @c = a\n  end\nend";
+        let a_in_rhs = find_offset(src, 2, b"a"); // second "a" is in RHS
+        // Should resolve as local variable (parameter a), not instance variable @c
+        assert_ne!(resolve(src, a_in_rhs), ivar("c", &["Foo"]));
     }
 
     // --- Local variable tests ---
