@@ -145,6 +145,10 @@ Local variable definitions are resolved entirely within the current file at quer
 - [x] Method parameters (`def foo(x)`) are treated as definitions
 - [x] Optional parameters (`def foo(x = 1)`)
 - [x] Rest parameters (`def foo(*args)`)
+- [ ] Block parameters (`def foo(&block)`)
+- [x] Required keyword parameters (`def foo(a:)`)
+- [x] Optional keyword parameters (`def foo(a: 1)`)
+- [x] Keyword rest parameters (`def foo(**opts)`)
 - [x] Block local variables (`arr.each { |item; local| }`)
 
 ### Scope Awareness

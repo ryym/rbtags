@@ -381,6 +381,18 @@ impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
             && name_id.as_slice() == self.name
         {
             self.record_candidate(loc.start_offset());
+            return;
+        }
+
+        // Optional parameters are branch nodes (they have default value children)
+        if let Some(n) = node.as_optional_parameter_node()
+            && n.name().as_slice() == self.name
+        {
+            self.record_candidate(n.name_loc().start_offset());
+        } else if let Some(n) = node.as_optional_keyword_parameter_node()
+            && n.name().as_slice() == self.name
+        {
+            self.record_candidate(n.name_loc().start_offset());
         }
     }
 
@@ -397,8 +409,27 @@ impl<'pr> Visit<'pr> for LocalVarDefFinder<'_> {
         } else if let Some(n) = node.as_rest_parameter_node() {
             if let Some(name) = n.name()
                 && name.as_slice() == self.name
+                && let Some(name_loc) = n.name_loc()
             {
-                self.record_candidate(n.location().start_offset());
+                self.record_candidate(name_loc.start_offset());
+            }
+        } else if let Some(n) = node.as_block_parameter_node() {
+            if let Some(name) = n.name()
+                && name.as_slice() == self.name
+                && let Some(name_loc) = n.name_loc()
+            {
+                self.record_candidate(name_loc.start_offset());
+            }
+        } else if let Some(n) = node.as_required_keyword_parameter_node() {
+            if n.name().as_slice() == self.name {
+                self.record_candidate(n.name_loc().start_offset());
+            }
+        } else if let Some(n) = node.as_keyword_rest_parameter_node() {
+            if let Some(name) = n.name()
+                && name.as_slice() == self.name
+                && let Some(name_loc) = n.name_loc()
+            {
+                self.record_candidate(name_loc.start_offset());
             }
         } else if let Some(n) = node.as_block_local_variable_node()
             && n.name().as_slice() == self.name
@@ -812,6 +843,46 @@ mod tests {
         let def_in_method2 = find_offset(src, 3, b"a"); // 3rd "a" = a = 2
         let read_in_method2 = find_offset(src, 4, b"a"); // 4th "a" = puts(a) in method2
         assert_eq!(resolve(src, read_in_method2), lvar("a", def_in_method2));
+    }
+
+    #[test]
+    fn local_variable_required_keyword_parameter() {
+        let src = b"def foo(a:, b:)\n  a + b\nend";
+        let param_a = find_offset(src, 1, b"a");
+        let read_a = find_offset(src, 2, b"a");
+        assert_eq!(resolve(src, read_a), lvar("a", param_a));
+    }
+
+    #[test]
+    fn local_variable_optional_keyword_parameter() {
+        let src = b"def foo(a: 1)\n  a\nend";
+        let param = find_offset(src, 1, b"a");
+        let read = find_offset(src, 2, b"a");
+        assert_eq!(resolve(src, read), lvar("a", param));
+    }
+
+    #[test]
+    fn local_variable_keyword_rest_parameter() {
+        let src = b"def foo(**args)\n  args\nend";
+        let param = find_offset(src, 1, b"args");
+        let read = find_offset(src, 2, b"args");
+        assert_eq!(resolve(src, read), lvar("args", param));
+    }
+
+    #[test]
+    fn local_variable_optional_parameter() {
+        let src = b"def foo(x = 1)\n  x\nend";
+        let param = find_offset(src, 1, b"x");
+        let read = find_offset(src, 2, b"x");
+        assert_eq!(resolve(src, read), lvar("x", param));
+    }
+
+    #[test]
+    fn local_variable_rest_parameter() {
+        let src = b"def foo(*args)\n  args\nend";
+        let param = find_offset(src, 1, b"args");
+        let read = find_offset(src, 2, b"args");
+        assert_eq!(resolve(src, read), lvar("args", param));
     }
 
     #[test]
