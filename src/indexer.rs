@@ -197,7 +197,13 @@ mod tests {
 
     #[test]
     fn nested_modules() {
-        let defs = index_source(b"module Foo\n  module Bar\n  end\nend");
+        let defs = index_source(
+            b"\
+module Foo
+  module Bar
+  end
+end",
+        );
         assert_eq!(defs[0].fqn, "Foo");
         assert_eq!(defs[0].kind, DefinitionKind::Module);
         assert_eq!(defs[1].fqn, "Foo::Bar");
@@ -206,41 +212,76 @@ mod tests {
 
     #[test]
     fn inline_constant_path() {
-        let defs = index_source(b"class Foo::Bar < Base\nend");
+        let defs = index_source(
+            b"\
+class Foo::Bar < Base
+end",
+        );
         assert_eq!(defs[0].fqn, "Foo::Bar");
         assert_eq!(defs[0].kind, DefinitionKind::Class);
     }
 
     #[test]
     fn methods_in_class() {
-        let defs = index_source(b"class Foo\n  def bar\n  end\nend");
+        let defs = index_source(
+            b"\
+class Foo
+  def bar
+  end
+end",
+        );
         assert_eq!(defs[1].fqn, "Foo#bar");
         assert_eq!(defs[1].kind, DefinitionKind::Method);
     }
 
     #[test]
     fn singleton_method() {
-        let defs = index_source(b"class Foo\n  def self.bar\n  end\nend");
+        let defs = index_source(
+            b"\
+class Foo
+  def self.bar
+  end
+end",
+        );
         assert_eq!(defs[1].fqn, "Foo.bar");
     }
 
     #[test]
     fn deeply_nested() {
-        let defs = index_source(b"module A\n  module B\n    class C\n    end\n  end\nend");
+        let defs = index_source(
+            b"\
+module A
+  module B
+    class C
+    end
+  end
+end",
+        );
         let fqns: Vec<&str> = defs.iter().map(|d| d.fqn.as_str()).collect();
         assert_eq!(fqns, ["A", "A::B", "A::B::C"]);
     }
 
     #[test]
     fn mixed_inline_and_nested() {
-        let defs = index_source(b"module A\n  class B::C\n  end\nend");
+        let defs = index_source(
+            b"\
+module A
+  class B::C
+  end
+end",
+        );
         let fqns: Vec<&str> = defs.iter().map(|d| d.fqn.as_str()).collect();
         assert_eq!(fqns, ["A", "A::B::C"]);
     }
 
     #[test]
     fn constant_in_class() {
-        let defs = index_source(b"class Foo\n  ABC = 1\nend");
+        let defs = index_source(
+            b"\
+class Foo
+  ABC = 1
+end",
+        );
         assert_eq!(defs[1].fqn, "Foo::ABC");
         assert_eq!(defs[1].kind, DefinitionKind::Constant);
     }
@@ -261,7 +302,14 @@ mod tests {
 
     #[test]
     fn constant_in_nested_module() {
-        let defs = index_source(b"module A\n  module B\n    X = 1\n  end\nend");
+        let defs = index_source(
+            b"\
+module A
+  module B
+    X = 1
+  end
+end",
+        );
         let fqns: Vec<&str> = defs.iter().map(|d| d.fqn.as_str()).collect();
         assert_eq!(fqns, ["A", "A::B", "A::B::X"]);
         assert_eq!(defs[2].kind, DefinitionKind::Constant);
@@ -269,7 +317,15 @@ mod tests {
 
     #[test]
     fn reopened_class() {
-        let src = b"class Foo\n  def a\n  end\nend\nclass Foo\n  def b\n  end\nend";
+        let src = b"\
+class Foo
+  def a
+  end
+end
+class Foo
+  def b
+  end
+end";
         let defs = index_source(src);
         assert!(defs.iter().any(|d| d.fqn == "Foo#a"));
         assert!(defs.iter().any(|d| d.fqn == "Foo#b"));
@@ -277,7 +333,12 @@ mod tests {
 
     #[test]
     fn instance_variable_in_method() {
-        let src = b"class User\n  def initialize(name)\n    @name = name\n  end\nend";
+        let src = b"\
+class User
+  def initialize(name)
+    @name = name
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)
@@ -288,7 +349,15 @@ mod tests {
 
     #[test]
     fn instance_variable_multiple_methods() {
-        let src = b"class Foo\n  def a\n    @x = 1\n  end\n  def b\n    @y = 2\n  end\nend";
+        let src = b"\
+class Foo
+  def a
+    @x = 1
+  end
+  def b
+    @y = 2
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)
@@ -300,7 +369,12 @@ mod tests {
 
     #[test]
     fn instance_variable_operator_write() {
-        let src = b"class Foo\n  def bar\n    @count += 1\n  end\nend";
+        let src = b"\
+class Foo
+  def bar
+    @count += 1
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)
@@ -311,7 +385,12 @@ mod tests {
 
     #[test]
     fn instance_variable_or_write() {
-        let src = b"class Foo\n  def bar\n    @cache ||= compute\n  end\nend";
+        let src = b"\
+class Foo
+  def bar
+    @cache ||= compute
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)
@@ -322,7 +401,14 @@ mod tests {
 
     #[test]
     fn instance_variable_in_nested_class() {
-        let src = b"module A\n  class B\n    def foo\n      @val = 1\n    end\n  end\nend";
+        let src = b"\
+module A
+  class B
+    def foo
+      @val = 1
+    end
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)
@@ -333,7 +419,15 @@ mod tests {
 
     #[test]
     fn instance_variable_duplicate_across_methods() {
-        let src = b"class Foo\n  def a\n    @x = 1\n  end\n  def b\n    @x = 2\n  end\nend";
+        let src = b"\
+class Foo
+  def a
+    @x = 1
+  end
+  def b
+    @x = 2
+  end
+end";
         let ivars: Vec<_> = index_source(src)
             .into_iter()
             .filter(|d| d.kind == DefinitionKind::InstanceVariable)

@@ -545,7 +545,10 @@ mod tests {
 
     #[test]
     fn constant_inside_class_body() {
-        let src = b"class Foo\n  Bar\nend";
+        let src = b"\
+class Foo
+  Bar
+end";
         assert_eq!(resolve(src, 12), constant_in("Bar", &["Foo"]));
     }
 
@@ -620,13 +623,21 @@ mod tests {
 
     #[test]
     fn constant_namespace_tracking() {
-        let src = b"module A\n  module B\n    Bar\n  end\nend";
+        let src = b"\
+module A
+  module B
+    Bar
+  end
+end";
         assert_eq!(resolve(src, 24), constant_in("Bar", &["A", "B"]));
     }
 
     #[test]
     fn constant_path_with_namespace() {
-        let src = b"module A\n  Foo::Bar\nend";
+        let src = b"\
+module A
+  Foo::Bar
+end";
         assert_eq!(resolve(src, 12), constant_in("Foo::Bar", &["A"]));
     }
 
@@ -658,7 +669,10 @@ mod tests {
     fn method_on_self() {
         // "class Foo\n  self.bar\nend"
         //  0123456789012345678901
-        let src = b"class Foo\n  self.bar\nend";
+        let src = b"\
+class Foo
+  self.bar
+end";
         assert_eq!(
             resolve(src, 17), // cursor on "bar"
             method("bar", MethodReceiver::SelfRef, &["Foo"])
@@ -670,7 +684,12 @@ mod tests {
         // "class Foo\n  def baz\n    bar\n  end\nend"
         //  0         1         2
         //  0123456789012345678901234567
-        let src = b"class Foo\n  def baz\n    bar\n  end\nend";
+        let src = b"\
+class Foo
+  def baz
+    bar
+  end
+end";
         assert_eq!(
             resolve(src, 24), // cursor on "bar"
             method("bar", MethodReceiver::None, &["Foo"])
@@ -706,7 +725,12 @@ mod tests {
     #[test]
     fn method_namespace_tracking() {
         // "module A\n  class B\n    foo.bar\n  end\nend"
-        let src = b"module A\n  class B\n    foo.bar\n  end\nend";
+        let src = b"\
+module A
+  class B
+    foo.bar
+  end
+end";
         assert_eq!(
             resolve(src, 27), // cursor on "bar"
             method(
@@ -745,34 +769,61 @@ mod tests {
         // "class Foo\n  def bar\n    @name\n  end\nend"
         //  0         1         2
         //  0123456789012345678901234567
-        let src = b"class Foo\n  def bar\n    @name\n  end\nend";
+        let src = b"\
+class Foo
+  def bar
+    @name
+  end
+end";
         assert_eq!(resolve(src, 24), ivar("name", &["Foo"]));
     }
 
     #[test]
     fn instance_variable_write() {
         // "class Foo\n  def bar\n    @name = 1\n  end\nend"
-        let src = b"class Foo\n  def bar\n    @name = 1\n  end\nend";
+        let src = b"\
+class Foo
+  def bar
+    @name = 1
+  end
+end";
         assert_eq!(resolve(src, 24), ivar("name", &["Foo"]));
     }
 
     #[test]
     fn instance_variable_in_nested_module() {
-        let src = b"module A\n  class B\n    def foo\n      @val\n    end\n  end\nend";
+        let src = b"\
+module A
+  class B
+    def foo
+      @val
+    end
+  end
+end";
         // @val starts at offset 37
         assert_eq!(resolve(src, 37), ivar("val", &["A", "B"]));
     }
 
     #[test]
     fn instance_variable_or_write() {
-        let src = b"class Foo\n  def bar\n    @cache ||= 1\n  end\nend";
+        let src = b"\
+class Foo
+  def bar
+    @cache ||= 1
+  end
+end";
         assert_eq!(resolve(src, 24), ivar("cache", &["Foo"]));
     }
 
     #[test]
     fn instance_variable_write_rhs_not_captured() {
         // Cursor on RHS of @c = expr should not resolve to @c
-        let src = b"class Foo\n  def bar(a)\n    @c = a\n  end\nend";
+        let src = b"\
+class Foo
+  def bar(a)
+    @c = a
+  end
+end";
         let a_in_rhs = find_offset(src, 2, b"a"); // second "a" is in RHS
         // Should resolve as local variable (parameter a), not instance variable @c
         assert_ne!(resolve(src, a_in_rhs), ivar("c", &["Foo"]));
@@ -789,21 +840,32 @@ mod tests {
 
     #[test]
     fn local_variable_read_jumps_to_assignment() {
-        let src = b"def foo\n  x = 1\n  x\nend";
+        let src = b"\
+def foo
+  x = 1
+  x
+end";
         let cursor = find_offset(src, 2, b"x"); // second "x" (the read)
         assert_eq!(resolve(src, cursor), lvar("x", find_offset(src, 1, b"x")));
     }
 
     #[test]
     fn local_variable_first_assignment_returns_none() {
-        let src = b"def foo\n  x = 1\nend";
+        let src = b"\
+def foo
+  x = 1
+end";
         let cursor = find_offset(src, 1, b"x");
         assert_eq!(resolve(src, cursor), None);
     }
 
     #[test]
     fn local_variable_second_assignment_jumps_to_first() {
-        let src = b"def foo\n  x = 1\n  x = 2\nend";
+        let src = b"\
+def foo
+  x = 1
+  x = 2
+end";
         let first = find_offset(src, 1, b"x");
         let second = find_offset(src, 2, b"x");
         assert_eq!(resolve(src, second), lvar("x", first));
@@ -811,7 +873,10 @@ mod tests {
 
     #[test]
     fn local_variable_method_parameter() {
-        let src = b"def foo(x)\n  x\nend";
+        let src = b"\
+def foo(x)
+  x
+end";
         let param = find_offset(src, 1, b"x");
         let read = find_offset(src, 2, b"x");
         assert_eq!(resolve(src, read), lvar("x", param));
@@ -820,7 +885,13 @@ mod tests {
     #[test]
     fn local_variable_scoped_to_method() {
         // In bar, x has never been assigned, so Ruby/Prism treats it as a method call
-        let src = b"def foo\n  x = 1\nend\ndef bar\n  x\nend";
+        let src = b"\
+def foo
+  x = 1
+end
+def bar
+  x
+end";
         let read_in_bar = find_offset(src, 2, b"x");
         assert_eq!(
             resolve(src, read_in_bar),
@@ -830,7 +901,10 @@ mod tests {
 
     #[test]
     fn local_variable_block_parameter() {
-        let src = b"[1].each do |item|\n  item\nend";
+        let src = b"\
+[1].each do |item|
+  item
+end";
         let param = find_offset(src, 1, b"item");
         let read = find_offset(src, 2, b"item");
         assert_eq!(resolve(src, read), lvar("item", param));
@@ -839,7 +913,18 @@ mod tests {
     #[test]
     fn local_variable_same_name_different_methods() {
         // Each method has its own scope — x in method2 should not jump to method1's x
-        let src = b"class Foo\n  def method1\n    a = 1\n    puts(a)\n  end\n\n  def method2\n    a = 2\n    puts(a)\n  end\nend";
+        let src = b"\
+class Foo
+  def method1
+    a = 1
+    puts(a)
+  end
+
+  def method2
+    a = 2
+    puts(a)
+  end
+end";
         let def_in_method2 = find_offset(src, 3, b"a"); // 3rd "a" = a = 2
         let read_in_method2 = find_offset(src, 4, b"a"); // 4th "a" = puts(a) in method2
         assert_eq!(resolve(src, read_in_method2), lvar("a", def_in_method2));
@@ -847,7 +932,10 @@ mod tests {
 
     #[test]
     fn local_variable_required_keyword_parameter() {
-        let src = b"def foo(a:, b:)\n  a + b\nend";
+        let src = b"\
+def foo(a:, b:)
+  a + b
+end";
         let param_a = find_offset(src, 1, b"a");
         let read_a = find_offset(src, 2, b"a");
         assert_eq!(resolve(src, read_a), lvar("a", param_a));
@@ -855,7 +943,10 @@ mod tests {
 
     #[test]
     fn local_variable_optional_keyword_parameter() {
-        let src = b"def foo(a: 1)\n  a\nend";
+        let src = b"\
+def foo(a: 1)
+  a
+end";
         let param = find_offset(src, 1, b"a");
         let read = find_offset(src, 2, b"a");
         assert_eq!(resolve(src, read), lvar("a", param));
@@ -863,7 +954,10 @@ mod tests {
 
     #[test]
     fn local_variable_keyword_rest_parameter() {
-        let src = b"def foo(**args)\n  args\nend";
+        let src = b"\
+def foo(**args)
+  args
+end";
         let param = find_offset(src, 1, b"args");
         let read = find_offset(src, 2, b"args");
         assert_eq!(resolve(src, read), lvar("args", param));
@@ -871,7 +965,10 @@ mod tests {
 
     #[test]
     fn local_variable_optional_parameter() {
-        let src = b"def foo(x = 1)\n  x\nend";
+        let src = b"\
+def foo(x = 1)
+  x
+end";
         let param = find_offset(src, 1, b"x");
         let read = find_offset(src, 2, b"x");
         assert_eq!(resolve(src, read), lvar("x", param));
@@ -879,7 +976,10 @@ mod tests {
 
     #[test]
     fn local_variable_rest_parameter() {
-        let src = b"def foo(*args)\n  args\nend";
+        let src = b"\
+def foo(*args)
+  args
+end";
         let param = find_offset(src, 1, b"args");
         let read = find_offset(src, 2, b"args");
         assert_eq!(resolve(src, read), lvar("args", param));
@@ -887,7 +987,13 @@ mod tests {
 
     #[test]
     fn local_variable_in_block_from_outer_scope() {
-        let src = b"def foo\n  x = 1\n  [1].each do\n    x\n  end\nend";
+        let src = b"\
+def foo
+  x = 1
+  [1].each do
+    x
+  end
+end";
         let def = find_offset(src, 1, b"x");
         let read = find_offset(src, 2, b"x");
         assert_eq!(resolve(src, read), lvar("x", def));

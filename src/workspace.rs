@@ -411,7 +411,12 @@ mod tests {
     #[test]
     fn index_file_and_lookup() {
         let mut index = WorkspaceIndex::new();
-        let source = b"module Foo\n  class Bar\n  end\nend\n";
+        let source = b"\
+module Foo
+  class Bar
+  end
+end
+";
         index.index_file(Path::new("a.rb"), source);
 
         let locs = lookup_fqns(&index, "Foo");
@@ -428,12 +433,26 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         let path = Path::new("a.rb");
 
-        index.index_file(path, b"class Foo\nend\n");
+        index.index_file(
+            path,
+            b"\
+class Foo
+end
+",
+        );
         assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
 
         // Simulate update: remove + re-index with new content
         index.remove_file(path);
-        index.index_file(path, b"class Foo\n  def hello\n  end\nend\n");
+        index.index_file(
+            path,
+            b"\
+class Foo
+  def hello
+  end
+end
+",
+        );
 
         let locs = lookup_fqns(&index, "Foo");
         assert_eq!(locs.len(), 1);
@@ -446,11 +465,23 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         let path = Path::new("a.rb");
 
-        index.index_file(path, b"class Foo\nend\n");
+        index.index_file(
+            path,
+            b"\
+class Foo
+end
+",
+        );
         assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
 
         index.remove_file(path);
-        index.index_file(path, b"class Bar\nend\n");
+        index.index_file(
+            path,
+            b"\
+class Bar
+end
+",
+        );
 
         assert_eq!(lookup_fqns(&index, "Foo").len(), 0);
         assert_eq!(lookup_fqns(&index, "Bar").len(), 1);
@@ -459,7 +490,13 @@ mod tests {
     #[test]
     fn remove_file() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+end
+",
+        );
         assert_eq!(lookup_fqns(&index, "Foo").len(), 1);
 
         index.remove_file(Path::new("a.rb"));
@@ -470,8 +507,20 @@ mod tests {
     #[test]
     fn multiple_files_same_fqn() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Foo\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Foo
+end
+",
+        );
         assert_eq!(lookup_fqns(&index, "Foo").len(), 2);
 
         index.remove_file(Path::new("a.rb"));
@@ -550,11 +599,21 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("app/models/user.rb"),
-            b"class User\n  def self.find\n  end\nend\n",
+            b"\
+class User
+  def self.find
+  end
+end
+",
         );
         index.index_file(
             Path::new("app/models/post.rb"),
-            b"class Post\n  def self.find\n  end\nend\n",
+            b"\
+class Post
+  def self.find
+  end
+end
+",
         );
 
         let reference = Reference::Method {
@@ -570,8 +629,24 @@ mod tests {
     #[test]
     fn method_lookup_same_namespace() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  def bar
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Baz
+  def bar
+  end
+end
+",
+        );
 
         let reference = Reference::Method {
             name: "bar".to_string(),
@@ -586,8 +661,24 @@ mod tests {
     #[test]
     fn method_lookup_variable_guess() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class User\n  def save\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Post\n  def save\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class User
+  def save
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Post
+  def save
+  end
+end
+",
+        );
 
         let reference = Reference::Method {
             name: "save".to_string(),
@@ -604,11 +695,21 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"class OrderItem\n  def total\n  end\nend\n",
+            b"\
+class OrderItem
+  def total
+  end
+end
+",
         );
         index.index_file(
             Path::new("b.rb"),
-            b"class Invoice\n  def total\n  end\nend\n",
+            b"\
+class Invoice
+  def total
+  end
+end
+",
         );
 
         let reference = Reference::Method {
@@ -624,8 +725,24 @@ mod tests {
     #[test]
     fn method_lookup_self_receiver() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  def bar
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Baz
+  def bar
+  end
+end
+",
+        );
 
         let reference = Reference::Method {
             name: "bar".to_string(),
@@ -642,11 +759,23 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"class Foo\n  class Bar\n    def self.create\n    end\n  end\nend\n",
+            b"\
+class Foo
+  class Bar
+    def self.create
+    end
+  end
+end
+",
         );
         index.index_file(
             Path::new("b.rb"),
-            b"class Baz\n  def self.create\n  end\nend\n",
+            b"\
+class Baz
+  def self.create
+  end
+end
+",
         );
 
         let reference = Reference::Method {
@@ -662,8 +791,24 @@ mod tests {
     #[test]
     fn method_lookup_variable_guess_no_match() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  def save\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Bar\n  def save\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  def save
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Bar
+  def save
+  end
+end
+",
+        );
 
         // Variable "unknown" → guesses "Unknown" which matches nothing → returns all
         let reference = Reference::Method {
@@ -681,11 +826,21 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("app/models/user.rb"),
-            b"class User\n  def foo\n  end\nend\n",
+            b"\
+class User
+  def foo
+  end
+end
+",
         );
         index.index_file(
             Path::new("lib/other.rb"),
-            b"class Other\n  def foo\n  end\nend\n",
+            b"\
+class Other
+  def foo
+  end
+end
+",
         );
 
         // No receiver, no namespace → all tier 4 → sorted by file distance
@@ -704,11 +859,21 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("app/models/post.rb"),
-            b"class Post\n  def foo\n  end\nend\n",
+            b"\
+class Post
+  def foo
+  end
+end
+",
         );
         index.index_file(
             Path::new("lib/utils/helper.rb"),
-            b"class Helper\n  def foo\n  end\nend\n",
+            b"\
+class Helper
+  def foo
+  end
+end
+",
         );
 
         let reference = Reference::Method {
@@ -725,8 +890,24 @@ mod tests {
     #[test]
     fn method_lookup_fallback_returns_all() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  def bar\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Baz\n  def bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  def bar
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Baz
+  def bar
+  end
+end
+",
+        );
 
         // Unknown receiver - should return all candidates
         let reference = Reference::Method {
@@ -809,7 +990,15 @@ mod tests {
     #[test]
     fn constant_lookup_exact_match() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  class Bar
+  end
+end
+",
+        );
 
         // "Foo::Bar" with no namespace → exact nesting match
         let results = lookup_constant_fqns(&index, "Foo::Bar", &[], Path::new("b.rb"));
@@ -820,8 +1009,24 @@ mod tests {
     #[test]
     fn constant_lookup_nesting_resolution() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
-        index.index_file(Path::new("b.rb"), b"class Baz\n  class Bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  class Bar
+  end
+end
+",
+        );
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Baz
+  class Bar
+  end
+end
+",
+        );
 
         // "Bar" inside namespace ["Foo"] → prefers "Foo::Bar"
         let results = lookup_constant_fqns(&index, "Bar", &["Foo"], Path::new("c.rb"));
@@ -833,7 +1038,16 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"module A\n  class Bar\n  end\n  module B\n    class Bar\n    end\n  end\nend\n",
+            b"\
+module A
+  class Bar
+  end
+  module B
+    class Bar
+    end
+  end
+end
+",
         );
 
         // "Bar" inside ["A", "B"] → prefers "A::B::Bar" over "A::Bar"
@@ -845,7 +1059,15 @@ mod tests {
     #[test]
     fn constant_lookup_suffix_fallback() {
         let mut index = WorkspaceIndex::new();
-        index.index_file(Path::new("a.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+        index.index_file(
+            Path::new("a.rb"),
+            b"\
+class Foo
+  class Bar
+  end
+end
+",
+        );
 
         // "Bar" inside namespace ["X"] (no X::Bar) → falls back to suffix match
         let results = lookup_constant_fqns(&index, "Bar", &["X"], Path::new("c.rb"));
@@ -858,9 +1080,24 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"module X\n  class Foo\n    class Bar\n    end\n  end\nend\n",
+            b"\
+module X
+  class Foo
+    class Bar
+    end
+  end
+end
+",
         );
-        index.index_file(Path::new("b.rb"), b"class Foo\n  class Bar\n  end\nend\n");
+        index.index_file(
+            Path::new("b.rb"),
+            b"\
+class Foo
+  class Bar
+  end
+end
+",
+        );
 
         // "Foo::Bar" inside namespace ["X"] → tries "X::Foo::Bar" first, then "Foo::Bar"
         let results = lookup_constant_fqns(&index, "Foo::Bar", &["X"], Path::new("c.rb"));
@@ -919,7 +1156,13 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"class User\n  def initialize\n    @name = ''\n  end\nend\n",
+            b"\
+class User
+  def initialize
+    @name = ''
+  end
+end
+",
         );
 
         let results = lookup_ivar_fqns(&index, "name", &["User"], Path::new("a.rb"));
@@ -932,11 +1175,23 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"class Foo\n  def a\n    @x = 1\n  end\nend\n",
+            b"\
+class Foo
+  def a
+    @x = 1
+  end
+end
+",
         );
         index.index_file(
             Path::new("b.rb"),
-            b"class Bar\n  def a\n    @x = 2\n  end\nend\n",
+            b"\
+class Bar
+  def a
+    @x = 2
+  end
+end
+",
         );
 
         // @x inside Foo → prefers Foo#@x
@@ -949,7 +1204,13 @@ mod tests {
         let mut index = WorkspaceIndex::new();
         index.index_file(
             Path::new("a.rb"),
-            b"class Foo\n  def a\n    @x = 1\n  end\nend\n",
+            b"\
+class Foo
+  def a
+    @x = 1
+  end
+end
+",
         );
 
         // @x inside Unknown → no nesting match → suffix fallback
