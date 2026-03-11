@@ -97,6 +97,15 @@ When the above rules do not narrow down candidates, prioritize definitions close
 - [x] Definitions in the same directory are next
 - [x] Otherwise, sort by longest common path prefix
 
+### Symbol as Method Name
+
+When the cursor is on a symbol literal (e.g., `:do_something`, `&:do_something`), treat it as a method name reference and search the index for matching method definitions.
+
+- [x] `:foo` → search for method `foo`
+- [x] `items.map(&:bar)` → search for method `bar`
+- [x] Only the value part of the symbol is matched (cursor on `:` alone does not trigger)
+- [x] Same priority and fallback rules as regular method calls apply
+
 ### Fallback
 
 - [x] If none of the above yields any candidates, return all definitions matching the method name (ctags-equivalent behavior)

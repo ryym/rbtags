@@ -254,6 +254,16 @@ impl<'pr> Visit<'pr> for ReferenceFinder {
                     depth: n.depth(),
                 });
             }
+        } else if let Some(n) = node.as_symbol_node()
+            && let Some(value_loc) = n.value_loc()
+            && loc_contains(&value_loc, self.offset)
+        {
+            let name = std::str::from_utf8(n.unescaped()).unwrap();
+            self.result = Some(Reference::Method {
+                name: name.to_string(),
+                receiver: MethodReceiver::None,
+                namespace: self.namespace.clone(),
+            });
         }
     }
 }
@@ -997,6 +1007,49 @@ end";
         let def = find_offset(src, 1, b"x");
         let read = find_offset(src, 2, b"x");
         assert_eq!(resolve(src, read), lvar("x", def));
+    }
+
+    // --- Symbol-as-method tests ---
+
+    #[test]
+    fn symbol_resolves_as_method() {
+        // ":foo"
+        //  0123
+        let src = b":foo";
+        assert_eq!(
+            resolve(src, 1), // cursor on "foo" part
+            method("foo", MethodReceiver::None, &[])
+        );
+    }
+
+    #[test]
+    fn symbol_in_block_argument() {
+        // "items.map(&:do_something)"
+        //  0123456789012345678901234
+        let src = b"items.map(&:do_something)";
+        assert_eq!(
+            resolve(src, 12), // cursor on "do_something"
+            method("do_something", MethodReceiver::None, &[])
+        );
+    }
+
+    #[test]
+    fn symbol_with_namespace() {
+        let src = b"\
+class Foo
+  items.map(&:bar)
+end";
+        assert_eq!(
+            resolve(src, 24), // cursor on "bar" inside :bar
+            method("bar", MethodReceiver::None, &["Foo"])
+        );
+    }
+
+    #[test]
+    fn symbol_colon_not_matched() {
+        // Cursor on the colon itself (before the value) should not resolve
+        let src = b":foo";
+        assert_eq!(resolve(src, 0), None);
     }
 
     /// Find the byte offset of the nth occurrence of `needle` in `src` (1-indexed).
