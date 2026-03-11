@@ -1,6 +1,6 @@
 # Rbtags
 
-A fast, lightweight Ruby LSP server focused on **go-to-definition** for constants and methods.
+A fast, lightweight Ruby LSP server focused on **go-to-definition**.
 
 ## Motivation
 
@@ -20,7 +20,7 @@ It focuses on accurate-enough definition jump with fast initialization based on 
 ## Trade-offs
 
 - **Static analysis only** — like Ctags, no runtime evaluation or type inference
-- **False positives are possible** — when a constant or method name is ambiguous, Rbtags may return multiple candidates (ranked by heuristics like namespace nesting and file distance)
+- **False positives are possible** — when a reference name is ambiguous, Rbtags may return multiple candidates (ranked by heuristics like namespace nesting and file distance)
 - **No dynamic definitions** — `define_method`, `class_eval`, Rails DSLs (`has_many`, etc.) are not recognized
 
 ## Features
@@ -51,7 +51,7 @@ cargo install --path .
 
 | Method                    | Description                                 |
 | ------------------------- | ------------------------------------------- |
-| `textDocument/definition` | Jump to constant or method definition       |
+| `textDocument/definition` | Jump to definition                          |
 | `workspace/symbol`        | Search definitions by FQN substring         |
 | `rbtags/bestDefinition`   | Like definition, but returns only top match |
 
