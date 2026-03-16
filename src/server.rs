@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,9 +7,11 @@ use std::str::FromStr;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     GotoDefinitionResponse, InitializeParams, Location, OneOf, Position, Range, ServerCapabilities,
-    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Uri, WorkspaceSymbolResponse, notification::DidSaveTextDocument,
-    request::GotoDefinition, request::WorkspaceSymbolRequest,
+    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri, WorkspaceSymbolResponse,
+    notification::DidChangeTextDocument, notification::DidCloseTextDocument,
+    notification::DidOpenTextDocument, notification::DidSaveTextDocument, request::GotoDefinition,
+    request::WorkspaceSymbolRequest,
 };
 
 use crate::indexer;
@@ -58,6 +61,8 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
         workspace_symbol_provider: Some(OneOf::Left(true)),
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
+                open_close: Some(true),
+                change: Some(TextDocumentSyncKind::FULL),
                 save: Some(TextDocumentSyncSaveOptions::Supported(true)),
                 ..Default::default()
             },
@@ -93,6 +98,7 @@ fn main_loop(
     let root = root_path.expect("failed to determine workspace root");
     log(format_args!("indexing {}", root.display()));
     let mut index = WorkspaceIndex::build(&root)?;
+    let mut open_documents: HashMap<String, Vec<u8>> = HashMap::new();
 
     log(format_args!(
         "indexed {} definitions across {} FQNs",
@@ -110,7 +116,7 @@ fn main_loop(
                 }
                 let req = match cast::<GotoDefinition>(req) {
                     Ok((id, params)) => {
-                        let result = handle_goto_definition(&index, &params);
+                        let result = handle_goto_definition(&index, &open_documents, &params);
                         let result = serde_json::to_value(&result)?;
                         let resp = Response {
                             id,
@@ -129,7 +135,7 @@ fn main_loop(
                 let req =
                     match req.extract::<lsp_types::GotoDefinitionParams>("rbtags/bestDefinition") {
                         Ok((id, params)) => {
-                            let result = handle_best_definition(&index, &params);
+                            let result = handle_best_definition(&index, &open_documents, &params);
                             let result = serde_json::to_value(&result)?;
                             let resp = Response {
                                 id,
@@ -167,6 +173,61 @@ fn main_loop(
             }
             Message::Notification(not) => {
                 log(format_args!("notification: method={}", not.method));
+                let not = match cast_notification::<DidOpenTextDocument>(not) {
+                    Ok(params) => {
+                        log(format_args!(
+                            "  didOpen: {}",
+                            params.text_document.uri.as_str()
+                        ));
+                        open_documents.insert(
+                            params.text_document.uri.as_str().to_string(),
+                            params.text_document.text.into_bytes(),
+                        );
+                        continue;
+                    }
+                    Err(ExtractError::MethodMismatch(not)) => not,
+                    Err(err @ ExtractError::JsonError { .. }) => {
+                        log(format_args!("error extracting notification: {err:?}"));
+                        continue;
+                    }
+                };
+                let not = match cast_notification::<DidChangeTextDocument>(not) {
+                    Ok(params) => {
+                        // With full sync, content_changes contains a single entry with the full text.
+                        if let Some(change) = params.content_changes.into_iter().next() {
+                            log(format_args!(
+                                "  didChange: {} ({} bytes)",
+                                params.text_document.uri.as_str(),
+                                change.text.len()
+                            ));
+                            open_documents.insert(
+                                params.text_document.uri.as_str().to_string(),
+                                change.text.into_bytes(),
+                            );
+                        }
+                        continue;
+                    }
+                    Err(ExtractError::MethodMismatch(not)) => not,
+                    Err(err @ ExtractError::JsonError { .. }) => {
+                        log(format_args!("error extracting notification: {err:?}"));
+                        continue;
+                    }
+                };
+                let not = match cast_notification::<DidCloseTextDocument>(not) {
+                    Ok(params) => {
+                        log(format_args!(
+                            "  didClose: {}",
+                            params.text_document.uri.as_str()
+                        ));
+                        open_documents.remove(params.text_document.uri.as_str());
+                        continue;
+                    }
+                    Err(ExtractError::MethodMismatch(not)) => not,
+                    Err(err @ ExtractError::JsonError { .. }) => {
+                        log(format_args!("error extracting notification: {err:?}"));
+                        continue;
+                    }
+                };
                 if let Ok(params) = cast_notification::<DidSaveTextDocument>(not)
                     && let Some(path) = uri_to_path(&params.text_document.uri)
                 {
@@ -216,6 +277,7 @@ fn handle_workspace_symbol(
 
 fn resolve_definition_locations(
     index: &WorkspaceIndex,
+    open_documents: &HashMap<String, Vec<u8>>,
     params: &lsp_types::GotoDefinitionParams,
 ) -> Vec<Location> {
     let uri = &params.text_document_position_params.text_document.uri;
@@ -233,11 +295,16 @@ fn resolve_definition_locations(
         return Vec::new();
     };
 
-    let source = match fs::read(&file_path) {
-        Ok(s) => s,
-        Err(e) => {
-            log(format_args!("  failed to read file: {e}"));
-            return Vec::new();
+    let source = if let Some(content) = open_documents.get(uri.as_str()) {
+        log(format_args!("  using in-memory document"));
+        content.clone()
+    } else {
+        match fs::read(&file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                log(format_args!("  failed to read file: {e}"));
+                return Vec::new();
+            }
         }
     };
 
@@ -298,9 +365,10 @@ fn resolve_definition_locations(
 
 fn handle_goto_definition(
     index: &WorkspaceIndex,
+    open_documents: &HashMap<String, Vec<u8>>,
     params: &lsp_types::GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
-    let locations = resolve_definition_locations(index, params);
+    let locations = resolve_definition_locations(index, open_documents, params);
     if locations.is_empty() {
         None
     } else {
@@ -310,9 +378,10 @@ fn handle_goto_definition(
 
 fn handle_best_definition(
     index: &WorkspaceIndex,
+    open_documents: &HashMap<String, Vec<u8>>,
     params: &lsp_types::GotoDefinitionParams,
 ) -> Option<Location> {
-    resolve_definition_locations(index, params)
+    resolve_definition_locations(index, open_documents, params)
         .into_iter()
         .next()
 }
