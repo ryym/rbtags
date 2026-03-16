@@ -7,6 +7,15 @@ Status legend:
 - [x] Implemented
 - [x] Not yet implemented
 
+## Document Sync
+
+The server tracks open documents in memory via LSP's document synchronization protocol.
+
+- [x] Use the in-memory document content (from `textDocument/didChange`) for reference resolution when handling go-to-definition requests, instead of reading from disk
+- [ ] Update the workspace index from in-memory document content on `textDocument/didChange` so that newly added definitions in unsaved files are available as jump targets
+
+Note: The workspace index is still updated from disk on `textDocument/didSave`. The unimplemented item above would allow newly defined constants, methods, etc. to appear as jump targets before the file is saved.
+
 ## Constant Jump
 
 ### Indexing
